@@ -64,20 +64,60 @@ class PtyManager {
       throw new Error(`Instance ${id} not found`);
     }
 
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        instance.pty.kill('SIGKILL');
-        this.instances.delete(id);
-        resolve();
-      }, config.gracefulShutdownTimeout);
+    // If already exited, just clean up
+    if (instance.status === 'exited') {
+      this.instances.delete(id);
+      return;
+    }
 
-      instance.pty.onExit(() => {
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const cleanup = () => {
+        if (resolved) return;
+        resolved = true;
         clearTimeout(timeout);
         this.instances.delete(id);
         resolve();
+      };
+
+      const timeout = setTimeout(() => {
+        // Force kill after timeout
+        try {
+          instance.pty.kill();
+        } catch (e) {
+          // Ignore errors during force kill
+        }
+        cleanup();
+      }, config.gracefulShutdownTimeout);
+
+      // Listen for exit
+      instance.pty.onExit(() => {
+        cleanup();
       });
 
-      instance.pty.kill('SIGTERM');
+      // On Windows, send Ctrl+C first, then kill
+      // On Unix, SIGTERM works fine
+      if (process.platform === 'win32') {
+        // Send Ctrl+C to gracefully terminate
+        try {
+          instance.pty.write('\x03');
+        } catch (e) {
+          // Ignore write errors
+        }
+        // Give it a moment, then force kill
+        setTimeout(() => {
+          if (!resolved) {
+            try {
+              instance.pty.kill();
+            } catch (e) {
+              // Ignore errors
+            }
+          }
+        }, 1000);
+      } else {
+        instance.pty.kill('SIGTERM');
+      }
     });
   }
 

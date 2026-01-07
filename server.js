@@ -194,6 +194,12 @@ wss.on('connection', (ws, req) => {
     try {
       const msg = JSON.parse(message.toString());
 
+      // Check if instance still exists
+      const currentInstance = ptyManager.get(instanceId);
+      if (!currentInstance || currentInstance.status === 'exited') {
+        return;
+      }
+
       switch (msg.type) {
         case 'input':
           ptyManager.write(instanceId, msg.data);
@@ -207,8 +213,13 @@ wss.on('connection', (ws, req) => {
           console.warn('Unknown message type:', msg.type);
       }
     } catch (error) {
-      console.error('Error processing message:', error);
-      ws.send(JSON.stringify({ type: 'error', message: error.message }));
+      // Only log if not an "instance not found" error
+      if (!error.message.includes('not found')) {
+        console.error('Error processing message:', error);
+        if (ws.readyState === ws.OPEN) {
+          ws.send(JSON.stringify({ type: 'error', message: error.message }));
+        }
+      }
     }
   });
 
