@@ -1,0 +1,5 @@
+node_modules/
+cookie.json
+*.log
+.env
+.claude/

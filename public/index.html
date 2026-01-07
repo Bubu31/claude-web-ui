@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Code UI</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1><i class="fa-solid fa-terminal"></i> Claude Code</h1>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">
+          <span><i class="fa-solid fa-layer-group"></i> Instances</span>
+          <button id="new-instance-btn" class="btn-icon-sm" title="Nouvelle instance">
+            <i class="fa-solid fa-plus"></i>
+          </button>
+        </div>
+        <ul id="instances-list" class="instances-list">
+          <!-- Instances will be inserted here -->
+        </ul>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-header">
+          <span><i class="fa-solid fa-folder-tree"></i> Projets</span>
+          <button id="refresh-projects-btn" class="btn-icon-sm" title="Rafraîchir">
+            <i class="fa-solid fa-rotate"></i>
+          </button>
+        </div>
+        <ul id="projects-list" class="projects-list">
+          <li class="loading"><i class="fa-solid fa-spinner fa-spin"></i> Scan...</li>
+        </ul>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="usage-stats">
+          <div class="usage-header-main">
+            <span class="usage-title"><i class="fa-solid fa-chart-pie"></i> Usage</span>
+            <button id="settings-btn" class="btn-icon-sm" title="Configurer cookie">
+              <i class="fa-solid fa-gear"></i>
+            </button>
+          </div>
+          <div id="usage-content">
+            <div class="usage-item">
+              <div class="usage-header">
+                <span class="usage-label"><i class="fa-solid fa-bolt"></i> Session (5h)</span>
+                <span id="session-value" class="usage-percent">--%</span>
+              </div>
+              <div class="usage-bar">
+                <div id="session-bar" class="usage-fill" style="width: 0%"></div>
+              </div>
+              <span id="session-reset" class="usage-reset"></span>
+            </div>
+            <div class="usage-item">
+              <div class="usage-header">
+                <span class="usage-label"><i class="fa-solid fa-calendar-week"></i> Semaine</span>
+                <span id="weekly-value" class="usage-percent">--%</span>
+              </div>
+              <div class="usage-bar">
+                <div id="weekly-bar" class="usage-fill" style="width: 0%"></div>
+              </div>
+              <span id="weekly-reset" class="usage-reset"></span>
+            </div>
+          </div>
+          <div id="usage-no-cookie" class="usage-no-cookie hidden">
+            <i class="fa-solid fa-cookie-bite"></i>
+            <span>Cookie requis</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <div id="terminal-container" class="terminal-container">
+        <div id="empty-state" class="empty-state">
+          <i class="fa-solid fa-terminal"></i>
+          <p>Sélectionnez un projet ou créez une instance</p>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal for new instance -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-folder-open"></i> Nouvelle instance</h2>
+        <button id="modal-close" class="btn-icon">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <label for="cwd-input">Chemin du dossier :</label>
+        <input
+          type="text"
+          id="cwd-input"
+          placeholder="C:\Users\...\mon-projet"
+          autocomplete="off"
+        >
+        <p id="error-message" class="error-message hidden"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="modal-cancel" class="btn btn-secondary">Annuler</button>
+        <button id="modal-create" class="btn btn-primary">
+          <i class="fa-solid fa-play"></i> Créer
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cookie Settings Modal -->
+  <div id="cookie-modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-cookie"></i> Configuration Cookie</h2>
+        <button id="cookie-modal-close" class="btn-icon">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-description">
+          Pour afficher vos limites d'usage, collez le cookie de votre session claude.ai :
+        </p>
+        <ol class="cookie-instructions">
+          <li>Ouvrez <a href="https://claude.ai" target="_blank">claude.ai</a> et connectez-vous</li>
+          <li>Ouvrez DevTools (F12) > onglet Network</li>
+          <li>Actualisez la page</li>
+          <li>Cliquez sur une requete vers claude.ai</li>
+          <li>Copiez la valeur de l'en-tete <code>Cookie</code></li>
+        </ol>
+        <label for="cookie-input">Cookie :</label>
+        <textarea
+          id="cookie-input"
+          placeholder="sessionKey=sk-ant-...; ..."
+          rows="4"
+        ></textarea>
+        <p id="cookie-error-message" class="error-message hidden"></p>
+        <p id="cookie-status" class="cookie-status"></p>
+      </div>
+      <div class="modal-footer">
+        <button id="cookie-modal-cancel" class="btn btn-secondary">Annuler</button>
+        <button id="cookie-modal-save" class="btn btn-primary">
+          <i class="fa-solid fa-check"></i> Enregistrer
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.min.js"></script>
+  <script src="js/websocket.js"></script>
+  <script src="js/terminal.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
