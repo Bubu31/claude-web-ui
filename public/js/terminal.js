@@ -7,6 +7,7 @@ class TerminalWrapper {
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'Consolas, "Courier New", monospace',
+      scrollback: 10000,
       theme: {
         background: '#11111b',
         foreground: '#cdd6f4',
@@ -36,13 +37,13 @@ class TerminalWrapper {
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
 
-    // Try WebGL addon for performance
-    try {
-      this.webglAddon = new WebglAddon.WebglAddon();
-      this.terminal.loadAddon(this.webglAddon);
-    } catch (e) {
-      console.warn('WebGL addon not available, using canvas renderer');
-    }
+    // Try WebGL addon for performance (disabled - can cause scroll issues)
+    // try {
+    //   this.webglAddon = new WebglAddon.WebglAddon();
+    //   this.terminal.loadAddon(this.webglAddon);
+    // } catch (e) {
+    //   console.warn('WebGL addon not available, using canvas renderer');
+    // }
 
     this.terminal.open(container);
     this.fit();
