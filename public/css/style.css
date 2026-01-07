@@ -287,6 +287,59 @@ body {
   background-color: var(--bg-primary);
 }
 
+/* Server Controls */
+.server-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.server-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.server-label i {
+  margin-right: 0.35rem;
+}
+
+.server-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-server {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-server:hover {
+  color: var(--text);
+  background-color: var(--bg-hover);
+}
+
+.btn-restart:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-shutdown:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .usage-stats {
   display: flex;
   flex-direction: column;

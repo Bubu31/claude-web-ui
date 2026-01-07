@@ -25,6 +25,10 @@ class App {
     this.cwdInput = document.getElementById('cwd-input');
     this.errorMessage = document.getElementById('error-message');
 
+    // Server control elements
+    this.restartServerBtn = document.getElementById('restart-server-btn');
+    this.shutdownServerBtn = document.getElementById('shutdown-server-btn');
+
     // Cookie modal elements
     this.settingsBtn = document.getElementById('settings-btn');
     this.usageContent = document.getElementById('usage-content');
@@ -89,6 +93,10 @@ class App {
         this._hideCookieModal();
       }
     });
+
+    // Server control events
+    this.restartServerBtn.addEventListener('click', () => this._restartServer());
+    this.shutdownServerBtn.addEventListener('click', () => this._shutdownServer());
 
     // Handle window resize
     window.addEventListener('resize', () => {
@@ -751,6 +759,63 @@ class App {
     } finally {
       this.cookieModalSave.disabled = false;
     }
+  }
+
+  async _restartServer() {
+    if (!confirm('Redémarrer le serveur ? Toutes les instances seront fermées.')) {
+      return;
+    }
+
+    this.restartServerBtn.disabled = true;
+    this._showToast('Redémarrage du serveur...', 'success');
+
+    try {
+      await fetch('/api/server/restart', { method: 'POST' });
+      // Server will restart, page will lose connection
+      setTimeout(() => {
+        this._showToast('Reconnexion...', 'success');
+        this._attemptReconnect();
+      }, 2000);
+    } catch (error) {
+      // Expected - server is restarting
+      setTimeout(() => {
+        this._attemptReconnect();
+      }, 2000);
+    }
+  }
+
+  async _shutdownServer() {
+    if (!confirm('Arrêter le serveur ? Toutes les instances seront fermées.')) {
+      return;
+    }
+
+    this.shutdownServerBtn.disabled = true;
+    this._showToast('Arrêt du serveur...', 'success');
+
+    try {
+      await fetch('/api/server/shutdown', { method: 'POST' });
+    } catch (error) {
+      // Expected if server shuts down
+    }
+  }
+
+  _attemptReconnect(attempts = 0) {
+    const maxAttempts = 10;
+    const delay = 1000;
+
+    fetch('/api/instances')
+      .then(() => {
+        // Server is back, reload page
+        window.location.reload();
+      })
+      .catch(() => {
+        if (attempts < maxAttempts) {
+          setTimeout(() => this._attemptReconnect(attempts + 1), delay);
+        } else {
+          this._showToast('Impossible de reconnecter', 'error');
+          this.restartServerBtn.disabled = false;
+        }
+      });
   }
 }
 

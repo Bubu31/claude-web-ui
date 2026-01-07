@@ -194,6 +194,38 @@ app.post('/api/cookie', (req, res) => {
   res.json({ success: true, message: 'Cookie saved' });
 });
 
+// Server control - Shutdown
+app.post('/api/server/shutdown', async (req, res) => {
+  res.json({ success: true, message: 'Server shutting down...' });
+  // Give time for response to be sent
+  setTimeout(() => {
+    shutdown();
+  }, 500);
+});
+
+// Server control - Restart
+app.post('/api/server/restart', async (req, res) => {
+  res.json({ success: true, message: 'Server restarting...' });
+  // Give time for response to be sent
+  setTimeout(async () => {
+    console.log('\nRestarting server...');
+    await ptyManager.closeAll();
+
+    // Spawn a new process to restart the server
+    const { spawn } = await import('child_process');
+    const child = spawn(process.argv[0], [process.argv[1]], {
+      cwd: __dirname,
+      detached: true,
+      stdio: 'ignore',
+      env: process.env,
+    });
+    child.unref();
+
+    // Exit current process
+    process.exit(0);
+  }, 500);
+});
+
 // WebSocket handling
 wss.on('connection', (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
