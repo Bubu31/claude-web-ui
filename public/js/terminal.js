@@ -67,20 +67,20 @@ class TerminalWrapper {
 
   _setupPasteHandler() {
     this._pasteCallbacks = [];
+    this._isPasting = false;
 
     // Intercept Ctrl+V / Ctrl+Shift+V
     this.terminal.attachCustomKeyEventHandler((event) => {
       if (event.type === 'keydown' && event.ctrlKey && (event.key === 'v' || event.key === 'V')) {
-        this._handlePaste();
+        if (!this._isPasting) {
+          this._isPasting = true;
+          this._handlePaste().finally(() => {
+            setTimeout(() => { this._isPasting = false; }, 100);
+          });
+        }
         return false; // Prevent default terminal handling
       }
       return true;
-    });
-
-    // Also handle right-click paste via context menu
-    this.container.addEventListener('paste', (e) => {
-      e.preventDefault();
-      this._handlePaste();
     });
   }
 
