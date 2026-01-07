@@ -287,6 +287,39 @@ body {
   background-color: var(--bg-primary);
 }
 
+/* Quick Actions */
+.quick-actions {
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.btn-quick-action {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-quick-action:hover {
+  background-color: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-quick-action i {
+  font-size: 0.9rem;
+}
+
 /* Server Controls */
 .server-controls {
   display: flex;
