@@ -198,9 +198,24 @@ app.post('/api/cookie', (req, res) => {
 app.post('/api/server/shutdown', async (req, res) => {
   res.json({ success: true, message: 'Server shutting down...' });
   // Give time for response to be sent
-  setTimeout(() => {
-    shutdown();
-  }, 500);
+  setTimeout(async () => {
+    console.log('\nShutdown requested via API...');
+    await ptyManager.closeAll();
+
+    // Close all WebSocket connections
+    wss.clients.forEach(client => client.close());
+
+    server.close(() => {
+      console.log('Server closed');
+      process.exit(0);
+    });
+
+    // Force exit after timeout
+    setTimeout(() => {
+      console.error('Forced shutdown');
+      process.exit(1);
+    }, 3000);
+  }, 300);
 });
 
 // Server control - Restart
@@ -210,6 +225,9 @@ app.post('/api/server/restart', async (req, res) => {
   setTimeout(async () => {
     console.log('\nRestarting server...');
     await ptyManager.closeAll();
+
+    // Close all WebSocket connections
+    wss.clients.forEach(client => client.close());
 
     // Spawn a new process to restart the server
     const { spawn } = await import('child_process');
@@ -221,9 +239,15 @@ app.post('/api/server/restart', async (req, res) => {
     });
     child.unref();
 
-    // Exit current process
-    process.exit(0);
-  }, 500);
+    server.close(() => {
+      process.exit(0);
+    });
+
+    // Force exit after timeout
+    setTimeout(() => {
+      process.exit(0);
+    }, 2000);
+  }, 300);
 });
 
 // WebSocket handling

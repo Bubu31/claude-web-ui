@@ -82,6 +82,13 @@ class TerminalWrapper {
       }
       return true;
     });
+
+    // Also intercept the browser's paste event to prevent xterm.js from handling it
+    this.container.addEventListener('paste', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      // Let our Ctrl+V handler deal with it
+    }, true);
   }
 
   async _handlePaste() {
