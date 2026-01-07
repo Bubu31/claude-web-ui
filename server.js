@@ -3,8 +3,9 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, statSync, readdirSync, readFileSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, statSync, readdirSync, readFileSync, mkdirSync } from 'fs';
+import { homedir, tmpdir } from 'os';
+import multer from 'multer';
 import config from './src/config.js';
 import PtyManager from './src/pty-manager.js';
 import claudeUsage from './src/claude-usage.js';
@@ -17,6 +18,36 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 const ptyManager = new PtyManager();
+
+// Configure image upload directory
+const uploadDir = join(tmpdir(), 'claude-code-ui-images');
+if (!existsSync(uploadDir)) {
+  mkdirSync(uploadDir, { recursive: true });
+}
+
+// Configure multer for image uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const ext = file.originalname.split('.').pop() || 'png';
+    cb(null, `image-${uniqueSuffix}.${ext}`);
+  }
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
 
 // Middleware
 app.use(express.json());
@@ -143,6 +174,14 @@ app.get('/api/usage', async (req, res) => {
 // Get cookie status
 app.get('/api/cookie/status', (req, res) => {
   res.json(claudeUsage.getCookieStatus());
+});
+
+// Upload image
+app.post('/api/upload-image', upload.single('image'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No image file provided' });
+  }
+  res.json({ path: req.file.path });
 });
 
 // Set cookie

@@ -666,3 +666,46 @@ body {
 .cookie-status.success {
   color: var(--accent-active);
 }
+
+/* Drop Zone Indicator */
+.terminal-container.drag-over {
+  position: relative;
+}
+
+.terminal-container.drag-over::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(137, 180, 250, 0.1);
+  border: 2px dashed var(--accent);
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 100;
+  animation: dropPulse 1s ease-in-out infinite;
+}
+
+.terminal-container.drag-over::before {
+  content: '\f03e  Deposer l\'image ici';
+  font-family: 'Font Awesome 6 Free', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-weight: 900;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--accent);
+  font-size: 1.25rem;
+  z-index: 101;
+  pointer-events: none;
+  background-color: var(--bg-secondary);
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+@keyframes dropPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}

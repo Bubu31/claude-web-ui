@@ -38,6 +38,8 @@ class App {
     this.cookieStatus = document.getElementById('cookie-status');
 
     this._bindEvents();
+    this._bindImagePaste();
+    this._bindImageDragDrop();
     this._loadInstances();
     this._loadProjects();
     this._loadUsageStats();
@@ -97,6 +99,124 @@ class App {
     });
   }
 
+  _bindImagePaste() {
+    // Listen for paste events on the terminal container
+    document.addEventListener('paste', async (e) => {
+      const activeInstance = this.instances.get(this.activeInstanceId);
+      if (!activeInstance) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            await this._uploadAndSendImage(file);
+          }
+          return;
+        }
+      }
+    });
+  }
+
+  _bindImageDragDrop() {
+    // Prevent default drag behaviors on the whole document
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      document.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+    });
+
+    // Handle drag enter/over on terminal container
+    this.terminalContainer.addEventListener('dragenter', (e) => {
+      if (this._hasDraggedImage(e)) {
+        this.terminalContainer.classList.add('drag-over');
+      }
+    });
+
+    this.terminalContainer.addEventListener('dragover', (e) => {
+      if (this._hasDraggedImage(e)) {
+        this.terminalContainer.classList.add('drag-over');
+      }
+    });
+
+    this.terminalContainer.addEventListener('dragleave', (e) => {
+      // Only remove class if we're leaving the container entirely
+      if (!this.terminalContainer.contains(e.relatedTarget)) {
+        this.terminalContainer.classList.remove('drag-over');
+      }
+    });
+
+    this.terminalContainer.addEventListener('drop', async (e) => {
+      this.terminalContainer.classList.remove('drag-over');
+
+      const activeInstance = this.instances.get(this.activeInstanceId);
+      if (!activeInstance) {
+        this._showToast('Aucune instance active', 'error');
+        return;
+      }
+
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      for (const file of files) {
+        if (file.type.startsWith('image/')) {
+          await this._uploadAndSendImage(file);
+        }
+      }
+    });
+  }
+
+  _hasDraggedImage(e) {
+    const types = e.dataTransfer?.types;
+    const items = e.dataTransfer?.items;
+
+    if (types?.includes('Files') && items) {
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  async _uploadAndSendImage(file) {
+    const activeInstance = this.instances.get(this.activeInstanceId);
+    if (!activeInstance) return;
+
+    // Show uploading indicator
+    this._showToast('Upload de l\'image...', 'success');
+
+    try {
+      const formData = new FormData();
+      formData.append('image', file);
+
+      const response = await fetch('/api/upload-image', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Erreur d\'upload');
+      }
+
+      const { path } = await response.json();
+
+      // Send the image path to the terminal
+      activeInstance.ws.sendInput(path);
+      this._showToast('Image envoyée', 'success');
+
+    } catch (error) {
+      console.error('Failed to upload image:', error);
+      this._showToast('Erreur: ' + error.message, 'error');
+    }
+  }
+
   async _loadInstances() {
     try {
       const response = await fetch('/api/instances');
@@ -144,6 +264,7 @@ class App {
       waiting: false,
       lastOutputTime: Date.now(),
       outputBuffer: '',
+      waitingDebounceTimer: null,
     };
 
     try {
@@ -251,8 +372,20 @@ class App {
     const isWaiting = hasWaitingPattern && !isWorking;
 
     if (isWaiting !== instance.waiting) {
-      instance.waiting = isWaiting;
-      this._renderInstancesList();
+      // Clear any pending debounce timer
+      if (instance.waitingDebounceTimer) {
+        clearTimeout(instance.waitingDebounceTimer);
+        instance.waitingDebounceTimer = null;
+      }
+
+      // Debounce the waiting state change to avoid flickering
+      instance.waitingDebounceTimer = setTimeout(() => {
+        instance.waitingDebounceTimer = null;
+        if (isWaiting !== instance.waiting) {
+          instance.waiting = isWaiting;
+          this._renderInstancesList();
+        }
+      }, 150); // 150ms debounce
     }
   }
 
@@ -359,15 +492,18 @@ class App {
       return;
     }
 
-    this.instancesList.innerHTML = '';
+    // Get existing items by their data-id
+    const existingItems = new Map();
+    this.instancesList.querySelectorAll('.instance-item').forEach(li => {
+      const id = li.dataset.id;
+      if (id) existingItems.set(id, li);
+    });
+
+    // Remove empty message if present
+    const emptyMsg = this.instancesList.querySelector('.empty-message');
+    if (emptyMsg) emptyMsg.remove();
 
     this.instances.forEach((instance, id) => {
-      const li = document.createElement('li');
-      li.className = 'instance-item';
-      if (id === this.activeInstanceId) {
-        li.classList.add('active');
-      }
-
       const folderName = instance.cwd.split(/[/\\]/).pop() || instance.cwd;
 
       let statusClass = '';
@@ -377,27 +513,54 @@ class App {
         statusClass = 'waiting';
       }
 
-      li.innerHTML = `
-        <span class="status-dot ${statusClass}"></span>
-        <span class="instance-name" title="${instance.cwd}">${folderName}</span>
-        <button class="close-btn" title="Fermer">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      `;
+      let li = existingItems.get(id);
 
-      li.addEventListener('click', (e) => {
-        if (!e.target.closest('.close-btn')) {
-          this._selectInstance(id);
+      if (li) {
+        // Update existing item
+        existingItems.delete(id); // Mark as processed
+
+        // Update active state
+        li.classList.toggle('active', id === this.activeInstanceId);
+
+        // Update status dot
+        const statusDot = li.querySelector('.status-dot');
+        if (statusDot) {
+          statusDot.className = 'status-dot ' + statusClass;
         }
-      });
+      } else {
+        // Create new item
+        li = document.createElement('li');
+        li.className = 'instance-item';
+        li.dataset.id = id;
+        if (id === this.activeInstanceId) {
+          li.classList.add('active');
+        }
 
-      li.querySelector('.close-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._closeInstance(id);
-      });
+        li.innerHTML = `
+          <span class="status-dot ${statusClass}"></span>
+          <span class="instance-name" title="${instance.cwd}">${folderName}</span>
+          <button class="close-btn" title="Fermer">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        `;
 
-      this.instancesList.appendChild(li);
+        li.addEventListener('click', (e) => {
+          if (!e.target.closest('.close-btn')) {
+            this._selectInstance(id);
+          }
+        });
+
+        li.querySelector('.close-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._closeInstance(id);
+        });
+
+        this.instancesList.appendChild(li);
+      }
     });
+
+    // Remove items that no longer exist
+    existingItems.forEach(li => li.remove());
   }
 
   _renderProjectsList() {
@@ -486,6 +649,11 @@ class App {
 
     try {
       await fetch(`/api/instances/${id}`, { method: 'DELETE' });
+
+      // Clean up debounce timer
+      if (instance.waitingDebounceTimer) {
+        clearTimeout(instance.waitingDebounceTimer);
+      }
 
       instance.ws.close();
       instance.terminal.dispose();
