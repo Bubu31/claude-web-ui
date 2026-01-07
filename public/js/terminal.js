@@ -47,6 +47,9 @@ class TerminalWrapper {
     this.terminal.open(container);
     this.fit();
 
+    // Handle paste (Ctrl+V)
+    this._setupPasteHandler();
+
     // Handle resize
     this._resizeObserver = new ResizeObserver(() => {
       this.fit();
@@ -60,6 +63,70 @@ class TerminalWrapper {
     } catch (e) {
       // Ignore fit errors during initialization
     }
+  }
+
+  _setupPasteHandler() {
+    this._pasteCallbacks = [];
+
+    // Intercept Ctrl+V / Ctrl+Shift+V
+    this.terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && event.ctrlKey && (event.key === 'v' || event.key === 'V')) {
+        this._handlePaste();
+        return false; // Prevent default terminal handling
+      }
+      return true;
+    });
+
+    // Also handle right-click paste via context menu
+    this.container.addEventListener('paste', (e) => {
+      e.preventDefault();
+      this._handlePaste();
+    });
+  }
+
+  async _handlePaste() {
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+
+      for (const item of clipboardItems) {
+        // Check for images first
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const file = new File([blob], 'pasted-image.png', { type: imageType });
+          this._pasteCallbacks.forEach(cb => cb({ type: 'image', file }));
+          return;
+        }
+
+        // Fall back to text
+        if (item.types.includes('text/plain')) {
+          const blob = await item.getType('text/plain');
+          const text = await blob.text();
+          this._pasteCallbacks.forEach(cb => cb({ type: 'text', text }));
+          return;
+        }
+      }
+    } catch (e) {
+      // Fallback for browsers that don't support clipboard.read()
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          this._pasteCallbacks.forEach(cb => cb({ type: 'text', text }));
+        }
+      } catch (err) {
+        console.warn('Clipboard access denied:', err);
+      }
+    }
+  }
+
+  onPaste(callback) {
+    this._pasteCallbacks.push(callback);
+    return {
+      dispose: () => {
+        const index = this._pasteCallbacks.indexOf(callback);
+        if (index > -1) this._pasteCallbacks.splice(index, 1);
+      }
+    };
   }
 
   write(data) {

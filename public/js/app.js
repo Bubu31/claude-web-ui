@@ -100,25 +100,8 @@ class App {
   }
 
   _bindImagePaste() {
-    // Listen for paste events on the terminal container
-    document.addEventListener('paste', async (e) => {
-      const activeInstance = this.instances.get(this.activeInstanceId);
-      if (!activeInstance) return;
-
-      const items = e.clipboardData?.items;
-      if (!items) return;
-
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) {
-            await this._uploadAndSendImage(file);
-          }
-          return;
-        }
-      }
-    });
+    // Paste handling is now done per-terminal via onPaste callback
+    // See _connectToInstance for the implementation
   }
 
   _bindImageDragDrop() {
@@ -294,6 +277,15 @@ class App {
 
       terminal.onResize(({ cols, rows }) => {
         ws.sendResize(cols, rows);
+      });
+
+      // Handle paste events (text and images)
+      terminal.onPaste(async (event) => {
+        if (event.type === 'image') {
+          await this._uploadAndSendImage(event.file);
+        } else if (event.type === 'text') {
+          ws.sendInput(event.text);
+        }
       });
 
       this.instances.set(instanceData.id, instance);
