@@ -571,7 +571,12 @@ class App {
 
     this.projectsList.innerHTML = '';
 
-    this.projects.forEach((project) => {
+    // Sort projects alphabetically by name (case-insensitive)
+    const sortedProjects = [...this.projects].sort((a, b) =>
+      a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+    );
+
+    sortedProjects.forEach((project) => {
       const li = document.createElement('li');
       li.className = 'project-item';
       li.title = project.path;
