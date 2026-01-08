@@ -161,6 +161,67 @@ app.get('/api/projects', (req, res) => {
   }
 });
 
+// List markdown files in a project
+app.get('/api/projects/markdown', (req, res) => {
+  const { path: projectPath } = req.query;
+
+  if (!projectPath) {
+    return res.status(400).json({ error: 'path query parameter is required' });
+  }
+
+  // Security: validate path is within projectsRoot
+  const normalizedPath = join(projectPath);
+  if (!normalizedPath.startsWith(config.projectsRoot)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  try {
+    const entries = readdirSync(projectPath, { withFileTypes: true });
+    const mdFiles = entries
+      .filter(e => e.isFile() && e.name.toLowerCase().endsWith('.md'))
+      .map(e => e.name)
+      .sort();
+    res.json({ files: mdFiles });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get markdown file content
+app.get('/api/projects/markdown/content', (req, res) => {
+  const { path: projectPath, file } = req.query;
+
+  if (!projectPath || !file) {
+    return res.status(400).json({ error: 'path and file query parameters are required' });
+  }
+
+  // Security: validate path and prevent directory traversal
+  if (file.includes('..') || file.includes('/') || file.includes('\\')) {
+    return res.status(403).json({ error: 'Invalid file name' });
+  }
+
+  const normalizedPath = join(projectPath);
+  if (!normalizedPath.startsWith(config.projectsRoot)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  const filePath = join(projectPath, file);
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    res.json({ content, name: file });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get usage stats from Claude API
 app.get('/api/usage', async (req, res) => {
   try {

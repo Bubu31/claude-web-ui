@@ -36,6 +36,7 @@
             <i class="fa-solid fa-rotate"></i>
           </button>
         </div>
+        <input type="text" id="project-filter" class="filter-input" placeholder="Filtrer les projets...">
         <ul id="projects-list" class="projects-list">
           <li class="loading"><i class="fa-solid fa-spinner fa-spin"></i> Scan...</li>
         </ul>
@@ -102,7 +103,20 @@
 
     <!-- Main content -->
     <main class="main-content">
-      <div id="terminal-container" class="terminal-container">
+      <div class="main-header">
+        <div class="layout-controls">
+          <button id="layout-single" class="btn-layout active" title="Vue simple">
+            <i class="fa-solid fa-square"></i>
+          </button>
+          <button id="layout-split" class="btn-layout" title="Vue 2 terminaux">
+            <i class="fa-solid fa-table-columns"></i>
+          </button>
+          <button id="layout-quad" class="btn-layout" title="Vue 4 terminaux">
+            <i class="fa-solid fa-table-cells"></i>
+          </button>
+        </div>
+      </div>
+      <div id="terminal-container" class="terminal-container layout-single">
         <div id="empty-state" class="empty-state">
           <i class="fa-solid fa-terminal"></i>
           <p>Sélectionnez un projet ou créez une instance</p>
@@ -177,9 +191,32 @@
     </div>
   </div>
 
+  <!-- Markdown Viewer Modal -->
+  <div id="markdown-modal-overlay" class="modal-overlay hidden">
+    <div class="modal markdown-modal">
+      <div class="modal-header">
+        <div class="markdown-header-left">
+          <h2><i class="fa-brands fa-markdown"></i> <span id="markdown-project-name">Projet</span></h2>
+          <select id="markdown-file-select" class="markdown-select">
+            <option value="">Choisir un fichier...</option>
+          </select>
+        </div>
+        <button id="markdown-modal-close" class="btn-icon">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body markdown-body">
+        <div id="markdown-content" class="markdown-content">
+          <p class="markdown-placeholder">Sélectionnez un fichier markdown</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="js/websocket.js"></script>
   <script src="js/terminal.js"></script>
   <script src="js/app.js"></script>

@@ -3,11 +3,14 @@ const MAX_INSTANCES = 5;
 class App {
   constructor() {
     this.instances = new Map();
-    this.activeInstanceId = null;
+    this.activeInstanceId = null;        // Focused instance (receives keyboard input)
+    this.visibleInstances = new Set();   // Set of visible instance IDs
+    this.layoutMode = 'single';          // 'single', 'split', 'quad'
     this.projects = [];
     // DOM elements
     this.instancesList = document.getElementById('instances-list');
     this.projectsList = document.getElementById('projects-list');
+    this.projectFilter = document.getElementById('project-filter');
     this.sessionValue = document.getElementById('session-value');
     this.sessionBar = document.getElementById('session-bar');
     this.sessionReset = document.getElementById('session-reset');
@@ -41,6 +44,19 @@ class App {
     this.cookieErrorMessage = document.getElementById('cookie-error-message');
     this.cookieStatus = document.getElementById('cookie-status');
 
+    // Markdown modal elements
+    this.markdownModalOverlay = document.getElementById('markdown-modal-overlay');
+    this.markdownModalClose = document.getElementById('markdown-modal-close');
+    this.markdownProjectName = document.getElementById('markdown-project-name');
+    this.markdownFileSelect = document.getElementById('markdown-file-select');
+    this.markdownContent = document.getElementById('markdown-content');
+    this.currentMarkdownProject = null;
+
+    // Layout control buttons
+    this.layoutSingleBtn = document.getElementById('layout-single');
+    this.layoutSplitBtn = document.getElementById('layout-split');
+    this.layoutQuadBtn = document.getElementById('layout-quad');
+
     this._bindEvents();
     this._bindImagePaste();
     this._bindImageDragDrop();
@@ -55,6 +71,7 @@ class App {
   _bindEvents() {
     this.newInstanceBtn.addEventListener('click', () => this._showModal());
     this.refreshProjectsBtn.addEventListener('click', () => this._loadProjects());
+    this.projectFilter.addEventListener('input', () => this._renderProjectsList());
     this.modalClose.addEventListener('click', () => this._hideModal());
     this.modalCancel.addEventListener('click', () => this._hideModal());
     this.modalCreate.addEventListener('click', () => this._createInstanceFromInput());
@@ -79,6 +96,9 @@ class App {
         if (!this.cookieModalOverlay.classList.contains('hidden')) {
           this._hideCookieModal();
         }
+        if (!this.markdownModalOverlay.classList.contains('hidden')) {
+          this._hideMarkdownModal();
+        }
       }
     });
 
@@ -94,16 +114,32 @@ class App {
       }
     });
 
+    // Markdown modal events
+    this.markdownModalClose.addEventListener('click', () => this._hideMarkdownModal());
+    this.markdownModalOverlay.addEventListener('click', (e) => {
+      if (e.target === this.markdownModalOverlay) {
+        this._hideMarkdownModal();
+      }
+    });
+    this.markdownFileSelect.addEventListener('change', () => {
+      const file = this.markdownFileSelect.value;
+      if (file && this.currentMarkdownProject) {
+        this._loadMarkdownContent(this.currentMarkdownProject, file);
+      }
+    });
+
     // Server control events
     this.restartServerBtn.addEventListener('click', () => this._restartServer());
     this.shutdownServerBtn.addEventListener('click', () => this._shutdownServer());
 
-    // Handle window resize
+    // Layout control events
+    this.layoutSingleBtn.addEventListener('click', () => this._setLayoutMode('single'));
+    this.layoutSplitBtn.addEventListener('click', () => this._setLayoutMode('split'));
+    this.layoutQuadBtn.addEventListener('click', () => this._setLayoutMode('quad'));
+
+    // Handle window resize - fit all visible terminals
     window.addEventListener('resize', () => {
-      const active = this.instances.get(this.activeInstanceId);
-      if (active && active.terminal) {
-        active.terminal.fit();
-      }
+      this._fitVisibleTerminals();
     });
   }
 
@@ -298,18 +334,10 @@ class App {
 
       this.instances.set(instanceData.id, instance);
 
-      // Select this instance if it's the first one
-      if (this.instances.size === 1) {
-        this._selectInstance(instanceData.id);
-      }
-
-      // Initial resize after a short delay
-      setTimeout(() => {
-        if (this.activeInstanceId === instanceData.id) {
-          terminal.fit();
-          ws.sendResize(terminal.cols, terminal.rows);
-        }
-      }, 100);
+      // Add to visible and select this instance
+      // In split mode, add to visible set; in single mode, replace
+      const addToVisible = this.layoutMode !== 'single' && this.visibleInstances.size > 0;
+      this._selectInstance(instanceData.id, addToVisible);
 
     } catch (error) {
       console.error('Failed to connect to instance:', error);
@@ -460,35 +488,115 @@ class App {
     return `${minutes}m`;
   }
 
-  _selectInstance(id) {
+  _selectInstance(id, addToVisible = false) {
     const instance = this.instances.get(id);
     if (!instance) return;
 
-    // Hide all terminal wrappers
-    this.terminalContainer.querySelectorAll('.terminal-wrapper').forEach(w => {
-      w.classList.remove('active');
-    });
+    const maxVisible = this.layoutMode === 'single' ? 1 : this.layoutMode === 'split' ? 2 : 4;
 
-    // Show selected terminal
-    instance.wrapper.classList.add('active');
-    this.emptyState.style.display = 'none';
+    if (this.layoutMode === 'single' || !addToVisible) {
+      // In single mode or when replacing: show only this instance
+      this.visibleInstances.clear();
+      this.visibleInstances.add(id);
+    } else {
+      // In split/quad mode with addToVisible: add to visible set if space available
+      if (this.visibleInstances.has(id)) {
+        // Already visible, just focus it
+      } else if (this.visibleInstances.size < maxVisible) {
+        // Add to visible
+        this.visibleInstances.add(id);
+      } else {
+        // Replace the oldest visible (or just add and remove first)
+        const firstVisible = this.visibleInstances.values().next().value;
+        this.visibleInstances.delete(firstVisible);
+        this.visibleInstances.add(id);
+      }
+    }
 
-    // Update active state
+    // Set focus to this instance
     this.activeInstanceId = id;
+    this._updateVisibleTerminals();
     this._renderInstancesList();
 
-    // Focus and resize terminal
+    // Update document title
+    const folderName = instance.cwd.split(/[/\\]/).pop() || instance.cwd;
+    document.title = `${folderName} - Claude Code UI`;
+
+    // Focus terminal
     setTimeout(() => {
-      instance.terminal.fit();
-      instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
       instance.terminal.focus();
     }, 50);
+  }
+
+  _setLayoutMode(mode) {
+    this.layoutMode = mode;
+
+    // Update button states
+    this.layoutSingleBtn.classList.toggle('active', mode === 'single');
+    this.layoutSplitBtn.classList.toggle('active', mode === 'split');
+    this.layoutQuadBtn.classList.toggle('active', mode === 'quad');
+
+    // Update container class
+    this.terminalContainer.classList.remove('layout-single', 'layout-split', 'layout-quad');
+    this.terminalContainer.classList.add(`layout-${mode}`);
+
+    // Adjust visible instances based on new mode
+    const maxVisible = mode === 'single' ? 1 : mode === 'split' ? 2 : 4;
+    while (this.visibleInstances.size > maxVisible) {
+      const firstVisible = this.visibleInstances.values().next().value;
+      if (firstVisible !== this.activeInstanceId) {
+        this.visibleInstances.delete(firstVisible);
+      } else {
+        // Don't remove the active one, remove the second one
+        const arr = Array.from(this.visibleInstances);
+        this.visibleInstances.delete(arr[1]);
+      }
+    }
+
+    this._updateVisibleTerminals();
+    this._renderInstancesList();
+  }
+
+  _updateVisibleTerminals() {
+    // Hide all terminals
+    this.terminalContainer.querySelectorAll('.terminal-wrapper').forEach(w => {
+      w.classList.remove('visible', 'focused');
+    });
+
+    // Show visible terminals
+    this.visibleInstances.forEach(id => {
+      const instance = this.instances.get(id);
+      if (instance) {
+        instance.wrapper.classList.add('visible');
+        if (id === this.activeInstanceId) {
+          instance.wrapper.classList.add('focused');
+        }
+      }
+    });
+
+    // Show/hide empty state
+    this.emptyState.style.display = this.visibleInstances.size === 0 ? 'block' : 'none';
+
+    // Fit all visible terminals after layout change
+    setTimeout(() => this._fitVisibleTerminals(), 50);
+  }
+
+  _fitVisibleTerminals() {
+    this.visibleInstances.forEach(id => {
+      const instance = this.instances.get(id);
+      if (instance && instance.terminal) {
+        instance.terminal.fit();
+        instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
+      }
+    });
   }
 
   _renderInstancesList() {
     if (this.instances.size === 0) {
       this.instancesList.innerHTML = '<li class="empty-message">Aucune instance</li>';
       this.emptyState.style.display = 'block';
+      document.title = 'Claude Code UI';
+      this._updateFavicon(0, false);
       return;
     }
 
@@ -519,8 +627,9 @@ class App {
         // Update existing item
         existingItems.delete(id); // Mark as processed
 
-        // Update active state
+        // Update active and visible states
         li.classList.toggle('active', id === this.activeInstanceId);
+        li.classList.toggle('visible', this.visibleInstances.has(id));
 
         // Update status dot
         const statusDot = li.querySelector('.status-dot');
@@ -535,6 +644,9 @@ class App {
         if (id === this.activeInstanceId) {
           li.classList.add('active');
         }
+        if (this.visibleInstances.has(id)) {
+          li.classList.add('visible');
+        }
 
         li.innerHTML = `
           <span class="status-dot ${statusClass}"></span>
@@ -546,7 +658,9 @@ class App {
 
         li.addEventListener('click', (e) => {
           if (!e.target.closest('.close-btn')) {
-            this._selectInstance(id);
+            // Ctrl+click adds to split view, normal click replaces
+            const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
+            this._selectInstance(id, addToVisible);
           }
         });
 
@@ -561,6 +675,37 @@ class App {
 
     // Remove items that no longer exist
     existingItems.forEach(li => li.remove());
+
+    // Update favicon with instance count and waiting status
+    const hasWaiting = Array.from(this.instances.values()).some(i => i.waiting);
+    this._updateFavicon(this.instances.size, hasWaiting);
+  }
+
+  _updateFavicon(count, hasWaiting) {
+    // Create dynamic SVG favicon with badge
+    const badgeColor = hasWaiting ? '#f9e2af' : '#a6e3a1'; // warning yellow or green
+    const bgColor = '#1e1e2e';
+    const accentColor = '#89b4fa';
+
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect width="100" height="100" rx="20" fill="${bgColor}"/>
+        <text x="50" y="58" font-family="system-ui, sans-serif" font-size="45" font-weight="bold" fill="${accentColor}" text-anchor="middle">&gt;_</text>
+        ${count > 0 ? `
+          <circle cx="78" cy="22" r="20" fill="${badgeColor}"/>
+          <text x="78" y="30" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" fill="${bgColor}" text-anchor="middle">${count}</text>
+        ` : ''}
+      </svg>
+    `;
+
+    const dataUrl = `data:image/svg+xml;base64,${btoa(svg)}`;
+    let favicon = document.querySelector('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement('link');
+      favicon.rel = 'icon';
+      document.head.appendChild(favicon);
+    }
+    favicon.href = dataUrl;
   }
 
   _renderProjectsList() {
@@ -571,8 +716,22 @@ class App {
 
     this.projectsList.innerHTML = '';
 
+    // Filter projects by search term
+    const filterText = this.projectFilter.value.toLowerCase().trim();
+    let filteredProjects = this.projects;
+    if (filterText) {
+      filteredProjects = this.projects.filter(p =>
+        p.name.toLowerCase().includes(filterText)
+      );
+    }
+
+    if (filteredProjects.length === 0) {
+      this.projectsList.innerHTML = '<li class="loading">Aucun résultat</li>';
+      return;
+    }
+
     // Sort projects alphabetically by name (case-insensitive)
-    const sortedProjects = [...this.projects].sort((a, b) =>
+    const sortedProjects = [...filteredProjects].sort((a, b) =>
       a.name.toLowerCase().localeCompare(b.name.toLowerCase())
     );
 
@@ -583,10 +742,22 @@ class App {
       li.innerHTML = `
         <i class="fa-solid fa-folder"></i>
         <span>${project.name}</span>
+        <button class="md-btn" title="Voir les fichiers markdown">
+          <i class="fa-brands fa-markdown"></i>
+        </button>
       `;
 
-      li.addEventListener('click', () => {
-        this._createInstance(project.path);
+      // Click on project name creates instance
+      li.addEventListener('click', (e) => {
+        if (!e.target.closest('.md-btn')) {
+          this._createInstance(project.path);
+        }
+      });
+
+      // Click on markdown button opens markdown modal
+      li.querySelector('.md-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showMarkdownModal(project.path, project.name);
       });
 
       this.projectsList.appendChild(li);
@@ -664,6 +835,7 @@ class App {
       instance.terminal.dispose();
       instance.wrapper.remove();
       this.instances.delete(id);
+      this.visibleInstances.delete(id);
 
       // Select another instance if this was active
       if (this.activeInstanceId === id) {
@@ -673,9 +845,11 @@ class App {
           this._selectInstance(remaining[0]);
         } else {
           this.emptyState.style.display = 'block';
+          document.title = 'Claude Code UI';
         }
       }
 
+      this._updateVisibleTerminals();
       this._renderInstancesList();
       this._showToast('Instance fermée', 'success');
 
@@ -763,6 +937,69 @@ class App {
       this.cookieErrorMessage.classList.remove('hidden');
     } finally {
       this.cookieModalSave.disabled = false;
+    }
+  }
+
+  async _showMarkdownModal(projectPath, projectName) {
+    this.currentMarkdownProject = projectPath;
+    this.markdownProjectName.textContent = projectName;
+    this.markdownContent.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
+    this.markdownFileSelect.innerHTML = '<option value="">Choisir un fichier...</option>';
+    this.markdownModalOverlay.classList.remove('hidden');
+
+    try {
+      const response = await fetch(`/api/projects/markdown?path=${encodeURIComponent(projectPath)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      if (data.files.length === 0) {
+        this.markdownContent.innerHTML = '<p class="markdown-placeholder">Aucun fichier markdown dans ce projet</p>';
+        return;
+      }
+
+      // Populate select
+      data.files.forEach(file => {
+        const option = document.createElement('option');
+        option.value = file;
+        option.textContent = file;
+        this.markdownFileSelect.appendChild(option);
+      });
+
+      // Auto-load first file (prefer CLAUDE.md or README.md)
+      const preferredFiles = ['CLAUDE.md', 'README.md', 'readme.md'];
+      const autoLoadFile = preferredFiles.find(f => data.files.includes(f)) || data.files[0];
+      this.markdownFileSelect.value = autoLoadFile;
+      this._loadMarkdownContent(projectPath, autoLoadFile);
+
+    } catch (error) {
+      this.markdownContent.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
+    }
+  }
+
+  _hideMarkdownModal() {
+    this.markdownModalOverlay.classList.add('hidden');
+    this.currentMarkdownProject = null;
+  }
+
+  async _loadMarkdownContent(projectPath, filename) {
+    this.markdownContent.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
+
+    try {
+      const response = await fetch(`/api/projects/markdown/content?path=${encodeURIComponent(projectPath)}&file=${encodeURIComponent(filename)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      // Render markdown
+      this.markdownContent.innerHTML = marked.parse(data.content);
+
+    } catch (error) {
+      this.markdownContent.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
   }
 
