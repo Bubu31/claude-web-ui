@@ -1118,6 +1118,12 @@ body {
   background: var(--bg-terminal);
 }
 
+/* Ensure markdown panel in split layout keeps column direction */
+.terminal-container.layout-split .terminal-wrapper.markdown-panel.visible {
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .markdown-panel-header {
   display: flex;
   justify-content: space-between;
