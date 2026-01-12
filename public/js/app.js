@@ -4,9 +4,14 @@ class App {
   constructor() {
     this.instances = new Map();
     this.activeInstanceId = null;        // Focused instance (receives keyboard input)
-    this.visibleInstances = new Set();   // Set of visible instance IDs
     this.layoutMode = 'single';          // 'single', 'split', 'quad'
     this.projects = [];
+
+    // Tab system - slots contain tabs
+    this.slots = [];                     // Array of slot objects
+    this.activeSlotIndex = 0;            // Which slot has focus
+    this.markdownPanels = new Map();     // Store markdown panels (like instances)
+    this.dragState = { tabId: null, sourceSlotIndex: null };  // Drag state
     // DOM elements
     this.instancesList = document.getElementById('instances-list');
     this.projectsList = document.getElementById('projects-list');
@@ -44,9 +49,6 @@ class App {
     this.cookieErrorMessage = document.getElementById('cookie-error-message');
     this.cookieStatus = document.getElementById('cookie-status');
 
-    // Markdown panel (in split view)
-    this.markdownPanel = null; // { wrapper, projectPath, projectName }
-
     // Layout control buttons
     this.layoutSingleBtn = document.getElementById('layout-single');
     this.layoutSplitBtn = document.getElementById('layout-split');
@@ -55,6 +57,7 @@ class App {
     this._bindEvents();
     this._bindImagePaste();
     this._bindImageDragDrop();
+    this._initializeSlots();
     this._loadInstances();
     this._loadProjects();
     this._loadUsageStats();
@@ -90,10 +93,6 @@ class App {
         }
         if (!this.cookieModalOverlay.classList.contains('hidden')) {
           this._hideCookieModal();
-        }
-        // Close markdown panel with Escape
-        if (this.markdownPanel) {
-          this._closeMarkdownPanel();
         }
       }
     });
@@ -131,51 +130,13 @@ class App {
   }
 
   _bindImageDragDrop() {
-    // Prevent default drag behaviors on the whole document
+    // Prevent default drag behaviors on the whole document, but only for external drags (not tab drags)
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
       document.addEventListener(eventName, (e) => {
+        // Don't prevent default if dragging a tab
+        if (this.dragState.tabId) return;
         e.preventDefault();
-        e.stopPropagation();
       });
-    });
-
-    // Handle drag enter/over on terminal container
-    this.terminalContainer.addEventListener('dragenter', (e) => {
-      if (this._hasDraggedImage(e)) {
-        this.terminalContainer.classList.add('drag-over');
-      }
-    });
-
-    this.terminalContainer.addEventListener('dragover', (e) => {
-      if (this._hasDraggedImage(e)) {
-        this.terminalContainer.classList.add('drag-over');
-      }
-    });
-
-    this.terminalContainer.addEventListener('dragleave', (e) => {
-      // Only remove class if we're leaving the container entirely
-      if (!this.terminalContainer.contains(e.relatedTarget)) {
-        this.terminalContainer.classList.remove('drag-over');
-      }
-    });
-
-    this.terminalContainer.addEventListener('drop', async (e) => {
-      this.terminalContainer.classList.remove('drag-over');
-
-      const activeInstance = this.instances.get(this.activeInstanceId);
-      if (!activeInstance) {
-        this._showToast('Aucune instance active', 'error');
-        return;
-      }
-
-      const files = e.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-
-      for (const file of files) {
-        if (file.type.startsWith('image/')) {
-          await this._uploadAndSendImage(file);
-        }
-      }
     });
   }
 
@@ -256,11 +217,10 @@ class App {
   }
 
   async _connectToInstance(instanceData) {
-    // Create terminal wrapper
+    // Create terminal wrapper (will be added to slot later)
     const wrapper = document.createElement('div');
     wrapper.className = 'terminal-wrapper';
     wrapper.id = `terminal-${instanceData.id}`;
-    this.terminalContainer.appendChild(wrapper);
 
     const terminal = new TerminalWrapper(wrapper);
     const ws = new WebSocketManager(instanceData.id);
@@ -316,9 +276,8 @@ class App {
 
       this.instances.set(instanceData.id, instance);
 
-      // Add to visible and select this instance
-      // In split mode, add to visible set; in single mode, replace
-      const addToVisible = this.layoutMode !== 'single' && this.visibleInstances.size > 0;
+      // Add to slot and select this instance
+      const addToVisible = this.layoutMode !== 'single' && this.slots[this.activeSlotIndex]?.tabs.length > 0;
       this._selectInstance(instanceData.id, addToVisible);
 
     } catch (error) {
@@ -394,6 +353,7 @@ class App {
         if (isWaiting !== instance.waiting) {
           instance.waiting = isWaiting;
           this._renderInstancesList();
+          this._updateTabStatus(instance.id);
         }
       }, 150); // 150ms debounce
     }
@@ -474,40 +434,33 @@ class App {
     const instance = this.instances.get(id);
     if (!instance) return;
 
-    const maxVisible = this.layoutMode === 'single' ? 1 : this.layoutMode === 'split' ? 2 : 4;
+    // Check if already in a slot
+    const existingSlotIndex = this._getSlotIndexForTab(id);
 
-    if (this.layoutMode === 'single' || !addToVisible) {
-      // In single mode or when replacing: show only this instance
-      this.visibleInstances.clear();
-      this.visibleInstances.add(id);
-    } else {
-      // In split/quad mode with addToVisible: add to visible set if space available
-      if (this.visibleInstances.has(id)) {
-        // Already visible, just focus it
-      } else if (this.visibleInstances.size < maxVisible) {
-        // Add to visible
-        this.visibleInstances.add(id);
-      } else {
-        // Replace the oldest visible (or just add and remove first)
-        const firstVisible = this.visibleInstances.values().next().value;
-        this.visibleInstances.delete(firstVisible);
-        this.visibleInstances.add(id);
-      }
+    if (existingSlotIndex !== -1) {
+      // Already in a slot - just activate and focus
+      this._activateTab(existingSlotIndex, id);
+      this._focusSlot(existingSlotIndex);
+      return;
     }
 
-    // Set focus to this instance
-    this.activeInstanceId = id;
-    this._updateVisibleTerminals();
-    this._renderInstancesList();
+    // Not in any slot - add to a slot
+    let targetSlotIndex;
 
-    // Update document title
-    const folderName = instance.cwd.split(/[/\\]/).pop() || instance.cwd;
-    document.title = `${folderName} - Claude Code UI`;
+    if (addToVisible && this.layoutMode !== 'single') {
+      // Find first empty slot or add to current
+      targetSlotIndex = this._findEmptySlot();
+      if (targetSlotIndex === -1) {
+        targetSlotIndex = this.activeSlotIndex;
+      }
+    } else {
+      // Add to active slot
+      targetSlotIndex = this.activeSlotIndex;
+    }
 
-    // Focus terminal
-    setTimeout(() => {
-      instance.terminal.focus();
-    }, 50);
+    // Add to slot as a tab
+    this._addTabToSlot(targetSlotIndex, id, true);
+    this._focusSlot(targetSlotIndex);
   }
 
   _setLayoutMode(mode) {
@@ -522,66 +475,584 @@ class App {
     this.terminalContainer.classList.remove('layout-single', 'layout-split', 'layout-quad');
     this.terminalContainer.classList.add(`layout-${mode}`);
 
-    // Adjust visible instances based on new mode
-    const maxVisible = mode === 'single' ? 1 : mode === 'split' ? 2 : 4;
-    while (this.visibleInstances.size > maxVisible) {
-      const firstVisible = this.visibleInstances.values().next().value;
-      if (firstVisible !== this.activeInstanceId) {
-        this.visibleInstances.delete(firstVisible);
-      } else {
-        // Don't remove the active one, remove the second one
-        const arr = Array.from(this.visibleInstances);
-        this.visibleInstances.delete(arr[1]);
-      }
-    }
+    // Update slot visibility
+    this._updateSlotVisibility();
 
-    this._updateVisibleTerminals();
+    // Fit all visible terminals
+    setTimeout(() => this._fitAllVisibleTerminals(), 50);
+
     this._renderInstancesList();
   }
 
-  _updateVisibleTerminals() {
-    // Hide all terminals
-    this.terminalContainer.querySelectorAll('.terminal-wrapper').forEach(w => {
-      w.classList.remove('visible', 'focused');
-    });
-
-    // Hide markdown panel
-    if (this.markdownPanel) {
-      this.markdownPanel.wrapper.classList.remove('visible');
-    }
-
-    // Show visible terminals
-    this.visibleInstances.forEach(id => {
-      const instance = this.instances.get(id);
-      if (instance) {
-        instance.wrapper.classList.add('visible');
-        if (id === this.activeInstanceId) {
-          instance.wrapper.classList.add('focused');
-        }
-      }
-    });
-
-    // Show markdown panel if it exists and we have space
-    if (this.markdownPanel) {
-      this.markdownPanel.wrapper.classList.add('visible');
-    }
-
-    // Show/hide empty state (hide if terminals or markdown panel visible)
-    const hasContent = this.visibleInstances.size > 0 || this.markdownPanel;
+  _updateEmptyState() {
+    const hasContent = this.slots.some(slot => slot.tabs.length > 0);
     this.emptyState.style.display = hasContent ? 'none' : 'block';
-
-    // Fit all visible terminals after layout change
-    setTimeout(() => this._fitVisibleTerminals(), 50);
   }
 
-  _fitVisibleTerminals() {
-    this.visibleInstances.forEach(id => {
-      const instance = this.instances.get(id);
+  _fitAllVisibleTerminals() {
+    this.slots.forEach(slot => {
+      if (!slot.activeTabId) return;
+      if (slot.activeTabId.startsWith('md-')) return;
+
+      const instance = this.instances.get(slot.activeTabId);
       if (instance && instance.terminal) {
         instance.terminal.fit();
         instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
       }
     });
+  }
+
+  // =============================================
+  // SLOT SYSTEM METHODS
+  // =============================================
+
+  _initializeSlots() {
+    // Create initial slots based on layout (start with 1 slot)
+    this._createSlot(0);
+    this.slots[0].element.classList.add('visible', 'focused');
+  }
+
+  _createSlot(index) {
+    const slotElement = document.createElement('div');
+    slotElement.className = 'slot';
+    slotElement.dataset.slotIndex = index;
+
+    slotElement.innerHTML = `
+      <div class="slot-tab-bar"></div>
+      <div class="slot-content"></div>
+    `;
+
+    // Insert before empty-state
+    this.terminalContainer.insertBefore(slotElement, this.emptyState);
+
+    const slot = {
+      id: `slot-${index}`,
+      tabs: [],
+      activeTabId: null,
+      element: slotElement,
+      tabBar: slotElement.querySelector('.slot-tab-bar'),
+      content: slotElement.querySelector('.slot-content')
+    };
+
+    this.slots[index] = slot;
+
+    // Bind events
+    this._bindSlotEvents(slot, index);
+
+    return slot;
+  }
+
+  _bindSlotEvents(slot, slotIndex) {
+    // Click on slot content to focus
+    slot.content.addEventListener('click', () => {
+      this._focusSlot(slotIndex);
+    });
+
+    // Tab bar drag & drop events
+    slot.tabBar.addEventListener('dragover', (e) => this._handleTabBarDragOver(e, slot));
+    slot.tabBar.addEventListener('dragleave', (e) => this._handleTabBarDragLeave(e, slot));
+    slot.tabBar.addEventListener('drop', (e) => this._handleTabBarDrop(e, slot));
+
+    // Content area drag & drop (for empty slots and images)
+    slot.content.addEventListener('dragover', (e) => this._handleContentDragOver(e, slot));
+    slot.content.addEventListener('dragleave', (e) => this._handleContentDragLeave(e, slot));
+    slot.content.addEventListener('drop', (e) => this._handleContentDrop(e, slot));
+  }
+
+  _updateSlotVisibility() {
+    const maxSlots = this.layoutMode === 'single' ? 1 : this.layoutMode === 'split' ? 2 : 4;
+
+    // Create slots if needed
+    while (this.slots.length < maxSlots) {
+      this._createSlot(this.slots.length);
+    }
+
+    // Update visibility
+    this.slots.forEach((slot, index) => {
+      if (index < maxSlots) {
+        slot.element.classList.add('visible');
+      } else {
+        slot.element.classList.remove('visible');
+      }
+    });
+
+    // Ensure activeSlotIndex is valid
+    if (this.activeSlotIndex >= maxSlots) {
+      this.activeSlotIndex = maxSlots - 1;
+      this._focusSlot(this.activeSlotIndex);
+    }
+
+    this._updateEmptyState();
+  }
+
+  _focusSlot(slotIndex) {
+    if (slotIndex < 0 || slotIndex >= this.slots.length) return;
+
+    this.activeSlotIndex = slotIndex;
+
+    // Update visual focus
+    this.slots.forEach((slot, i) => {
+      slot.element.classList.toggle('focused', i === slotIndex);
+    });
+
+    // Focus the active tab's terminal if it's a terminal
+    const slot = this.slots[slotIndex];
+    if (slot && slot.activeTabId && !slot.activeTabId.startsWith('md-')) {
+      const instance = this.instances.get(slot.activeTabId);
+      if (instance) {
+        this.activeInstanceId = slot.activeTabId;
+        instance.terminal.focus();
+
+        // Update document title
+        const folderName = instance.cwd.split(/[/\\]/).pop() || instance.cwd;
+        document.title = `${folderName} - Claude Code UI`;
+      }
+    }
+
+    this._renderInstancesList();
+  }
+
+  _findEmptySlot() {
+    const maxSlots = this.layoutMode === 'single' ? 1 : this.layoutMode === 'split' ? 2 : 4;
+
+    for (let i = 0; i < Math.min(this.slots.length, maxSlots); i++) {
+      if (this.slots[i].tabs.length === 0) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  _getSlotIndexForTab(tabId) {
+    for (let i = 0; i < this.slots.length; i++) {
+      if (this.slots[i].tabs.includes(tabId)) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // =============================================
+  // TAB MANAGEMENT METHODS
+  // =============================================
+
+  _addTabToSlot(slotIndex, tabId, activate = true) {
+    // Ensure slot exists
+    while (this.slots.length <= slotIndex) {
+      this._createSlot(this.slots.length);
+    }
+
+    const slot = this.slots[slotIndex];
+
+    // Check if tab already exists in this slot
+    if (slot.tabs.includes(tabId)) {
+      if (activate) {
+        this._activateTab(slotIndex, tabId);
+      }
+      return;
+    }
+
+    // Remove from any other slot first
+    this._removeTabFromAllSlots(tabId);
+
+    // Add to this slot
+    slot.tabs.push(tabId);
+
+    // Create tab element
+    this._createTabElement(slot, tabId);
+
+    // Move the content wrapper to this slot
+    this._moveContentToSlot(slotIndex, tabId);
+
+    if (activate || slot.tabs.length === 1) {
+      this._activateTab(slotIndex, tabId);
+    }
+
+    this._updateEmptyState();
+    this._updateSlotVisibility();
+  }
+
+  _createTabElement(slot, tabId) {
+    const isMarkdown = tabId.startsWith('md-');
+    let name, status = '', title = '';
+
+    if (isMarkdown) {
+      const panel = this.markdownPanels.get(tabId);
+      name = panel ? panel.projectName : 'Markdown';
+      title = panel ? panel.projectPath : '';
+    } else {
+      const instance = this.instances.get(tabId);
+      if (!instance) return;
+      name = instance.cwd.split(/[/\\]/).pop() || instance.cwd;
+      title = instance.cwd;
+
+      if (instance.status === 'exited') {
+        status = 'exited';
+      } else if (instance.waiting) {
+        status = 'waiting';
+      }
+    }
+
+    const tab = document.createElement('div');
+    tab.className = 'tab';
+    tab.dataset.tabId = tabId;
+    tab.draggable = true;
+    tab.innerHTML = `
+      ${!isMarkdown ? `<span class="status-indicator ${status}"></span>` : ''}
+      <span class="tab-icon">
+        <i class="fa-${isMarkdown ? 'brands fa-markdown' : 'solid fa-terminal'}"></i>
+      </span>
+      <span class="tab-name" title="${title}">${name}</span>
+      <button class="tab-close" title="Fermer">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    `;
+
+    // Tab click to activate
+    tab.addEventListener('click', (e) => {
+      if (!e.target.closest('.tab-close')) {
+        const slotIdx = this._getSlotIndexForTab(tabId);
+        if (slotIdx !== -1) {
+          this._activateTab(slotIdx, tabId);
+          this._focusSlot(slotIdx);
+        }
+      }
+    });
+
+    // Close button
+    tab.querySelector('.tab-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._closeTab(tabId);
+    });
+
+    // Drag events
+    tab.addEventListener('dragstart', (e) => this._handleTabDragStart(e, tabId));
+    tab.addEventListener('dragend', (e) => this._handleTabDragEnd(e, tabId));
+    tab.addEventListener('dragover', (e) => this._handleTabDragOver(e, tab));
+    tab.addEventListener('dragleave', (e) => this._handleTabDragLeave(e, tab));
+    tab.addEventListener('drop', (e) => this._handleTabDrop(e, tab, slot));
+
+    slot.tabBar.appendChild(tab);
+  }
+
+  _activateTab(slotIndex, tabId) {
+    const slot = this.slots[slotIndex];
+    if (!slot) return;
+
+    // Deactivate all tabs in this slot
+    slot.tabBar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    slot.content.querySelectorAll('.terminal-wrapper, .markdown-panel').forEach(w => {
+      w.classList.remove('visible');
+    });
+
+    // Activate the selected tab
+    const tabEl = slot.tabBar.querySelector(`[data-tab-id="${tabId}"]`);
+    if (tabEl) tabEl.classList.add('active');
+
+    slot.activeTabId = tabId;
+
+    // Show the content
+    const isMarkdown = tabId.startsWith('md-');
+    if (isMarkdown) {
+      const panel = this.markdownPanels.get(tabId);
+      if (panel && panel.wrapper) {
+        panel.wrapper.classList.add('visible');
+      }
+    } else {
+      const instance = this.instances.get(tabId);
+      if (instance && instance.wrapper) {
+        instance.wrapper.classList.add('visible');
+        // Fit terminal after becoming visible
+        setTimeout(() => {
+          instance.terminal.fit();
+          instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
+        }, 50);
+      }
+    }
+  }
+
+  _removeTabFromAllSlots(tabId) {
+    this.slots.forEach((slot, index) => {
+      const tabIndex = slot.tabs.indexOf(tabId);
+      if (tabIndex > -1) {
+        slot.tabs.splice(tabIndex, 1);
+
+        // Remove tab element
+        const tabEl = slot.tabBar.querySelector(`[data-tab-id="${tabId}"]`);
+        if (tabEl) tabEl.remove();
+
+        // If this was the active tab, activate another
+        if (slot.activeTabId === tabId) {
+          slot.activeTabId = null;
+          if (slot.tabs.length > 0) {
+            this._activateTab(index, slot.tabs[0]);
+          }
+        }
+      }
+    });
+  }
+
+  _moveContentToSlot(slotIndex, tabId) {
+    const slot = this.slots[slotIndex];
+    if (!slot) return;
+
+    const isMarkdown = tabId.startsWith('md-');
+    let wrapper;
+
+    if (isMarkdown) {
+      const panel = this.markdownPanels.get(tabId);
+      wrapper = panel?.wrapper;
+    } else {
+      const instance = this.instances.get(tabId);
+      wrapper = instance?.wrapper;
+    }
+
+    if (wrapper && wrapper.parentElement !== slot.content) {
+      slot.content.appendChild(wrapper);
+    }
+  }
+
+  _closeTab(tabId) {
+    const isMarkdown = tabId.startsWith('md-');
+
+    if (isMarkdown) {
+      this._closeMarkdownTab(tabId);
+    } else {
+      // Use existing close instance logic
+      this._closeInstance(tabId);
+    }
+  }
+
+  _closeMarkdownTab(tabId) {
+    const panel = this.markdownPanels.get(tabId);
+    if (!panel) return;
+
+    // Remove from slots
+    this._removeTabFromAllSlots(tabId);
+
+    // Clean up
+    panel.wrapper.remove();
+    this.markdownPanels.delete(tabId);
+
+    this._updateEmptyState();
+  }
+
+  _updateTabStatus(instanceId) {
+    const instance = this.instances.get(instanceId);
+    if (!instance) return;
+
+    const slotIndex = this._getSlotIndexForTab(instanceId);
+    if (slotIndex === -1) return;
+
+    const slot = this.slots[slotIndex];
+    const tabEl = slot.tabBar.querySelector(`[data-tab-id="${instanceId}"]`);
+    if (!tabEl) return;
+
+    const indicator = tabEl.querySelector('.status-indicator');
+    if (!indicator) return;
+
+    indicator.classList.remove('waiting', 'exited');
+    if (instance.status === 'exited') {
+      indicator.classList.add('exited');
+    } else if (instance.waiting) {
+      indicator.classList.add('waiting');
+    }
+  }
+
+  _rebuildSlotTabBar(slot) {
+    // Clear existing tabs
+    slot.tabBar.innerHTML = '';
+
+    // Recreate in order
+    slot.tabs.forEach(tabId => {
+      this._createTabElement(slot, tabId);
+    });
+
+    // Mark active tab
+    if (slot.activeTabId) {
+      const activeTab = slot.tabBar.querySelector(`[data-tab-id="${slot.activeTabId}"]`);
+      if (activeTab) activeTab.classList.add('active');
+    }
+  }
+
+  // =============================================
+  // TAB DRAG & DROP HANDLERS
+  // =============================================
+
+  _handleTabDragStart(e, tabId) {
+    this.dragState.tabId = tabId;
+    this.dragState.sourceSlotIndex = this._getSlotIndexForTab(tabId);
+
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', tabId);
+
+    const tabEl = e.target.closest('.tab');
+    if (tabEl) {
+      tabEl.classList.add('dragging');
+    }
+  }
+
+  _handleTabDragEnd(e, tabId) {
+    // Clean up drag state
+    this.dragState.tabId = null;
+    this.dragState.sourceSlotIndex = null;
+
+    // Remove all drag classes
+    document.querySelectorAll('.tab.dragging').forEach(el => el.classList.remove('dragging'));
+    document.querySelectorAll('.tab.drag-over-left, .tab.drag-over-right').forEach(el => {
+      el.classList.remove('drag-over-left', 'drag-over-right');
+    });
+    document.querySelectorAll('.slot-tab-bar.drag-over').forEach(el => el.classList.remove('drag-over'));
+    document.querySelectorAll('.slot-content.drag-over-empty').forEach(el => el.classList.remove('drag-over-empty'));
+  }
+
+  _handleTabDragOver(e, tabEl) {
+    if (!this.dragState.tabId) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+
+    // Determine if dropping left or right of this tab
+    const rect = tabEl.getBoundingClientRect();
+    const midpoint = rect.left + rect.width / 2;
+
+    tabEl.classList.remove('drag-over-left', 'drag-over-right');
+    if (e.clientX < midpoint) {
+      tabEl.classList.add('drag-over-left');
+    } else {
+      tabEl.classList.add('drag-over-right');
+    }
+  }
+
+  _handleTabDragLeave(e, tabEl) {
+    tabEl.classList.remove('drag-over-left', 'drag-over-right');
+  }
+
+  _handleTabDrop(e, tabEl, slot) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const draggedTabId = this.dragState.tabId;
+    if (!draggedTabId) return;
+
+    const targetTabId = tabEl.dataset.tabId;
+    if (draggedTabId === targetTabId) {
+      this._handleTabDragEnd(e, draggedTabId);
+      return;
+    }
+
+    const slotIndex = parseInt(slot.element.dataset.slotIndex);
+
+    // Determine insert position
+    const rect = tabEl.getBoundingClientRect();
+    const insertBefore = e.clientX < rect.left + rect.width / 2;
+
+    // Remove from source
+    this._removeTabFromAllSlots(draggedTabId);
+
+    // Find target position
+    const targetIndex = slot.tabs.indexOf(targetTabId);
+    const insertIndex = insertBefore ? targetIndex : targetIndex + 1;
+
+    // Insert at position
+    slot.tabs.splice(insertIndex, 0, draggedTabId);
+
+    // Move content
+    this._moveContentToSlot(slotIndex, draggedTabId);
+
+    // Recreate tab bar to reflect new order
+    this._rebuildSlotTabBar(slot);
+
+    // Activate the dropped tab
+    this._activateTab(slotIndex, draggedTabId);
+    this._focusSlot(slotIndex);
+
+    this._handleTabDragEnd(e, draggedTabId);
+  }
+
+  _handleTabBarDragOver(e, slot) {
+    if (!this.dragState.tabId) return;
+
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    slot.tabBar.classList.add('drag-over');
+  }
+
+  _handleTabBarDragLeave(e, slot) {
+    if (!slot.tabBar.contains(e.relatedTarget)) {
+      slot.tabBar.classList.remove('drag-over');
+    }
+  }
+
+  _handleTabBarDrop(e, slot) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const draggedTabId = this.dragState.tabId;
+    if (!draggedTabId) return;
+
+    // If dropped on a specific tab, that's handled by _handleTabDrop
+    if (e.target.closest('.tab')) return;
+
+    const slotIndex = parseInt(slot.element.dataset.slotIndex);
+
+    // Remove from source
+    this._removeTabFromAllSlots(draggedTabId);
+
+    // Add to end
+    slot.tabs.push(draggedTabId);
+    this._createTabElement(slot, draggedTabId);
+    this._moveContentToSlot(slotIndex, draggedTabId);
+    this._activateTab(slotIndex, draggedTabId);
+    this._focusSlot(slotIndex);
+
+    slot.tabBar.classList.remove('drag-over');
+    this._handleTabDragEnd(e, draggedTabId);
+  }
+
+  _handleContentDragOver(e, slot) {
+    // Handle tab drag to empty slot
+    if (this.dragState.tabId && slot.tabs.length === 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      slot.content.classList.add('drag-over-empty');
+      return;
+    }
+
+    // Handle image drag (existing functionality)
+    if (this._hasDraggedImage(e)) {
+      e.preventDefault();
+      this.terminalContainer.classList.add('drag-over');
+    }
+  }
+
+  _handleContentDragLeave(e, slot) {
+    slot.content.classList.remove('drag-over-empty');
+  }
+
+  _handleContentDrop(e, slot) {
+    // Handle tab drop
+    if (this.dragState.tabId) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const draggedTabId = this.dragState.tabId;
+      const slotIndex = parseInt(slot.element.dataset.slotIndex);
+      this._addTabToSlot(slotIndex, draggedTabId, true);
+
+      slot.content.classList.remove('drag-over-empty');
+      this._handleTabDragEnd(e, draggedTabId);
+      return;
+    }
+
+    // Handle image drop (existing functionality)
+    if (this._hasDraggedImage(e)) {
+      e.preventDefault();
+      this.terminalContainer.classList.remove('drag-over');
+      const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      files.forEach(file => this._uploadAndSendImage(file));
+    }
   }
 
   _renderInstancesList() {
@@ -622,7 +1093,7 @@ class App {
 
         // Update active and visible states
         li.classList.toggle('active', id === this.activeInstanceId);
-        li.classList.toggle('visible', this.visibleInstances.has(id));
+        li.classList.toggle('visible', this._getSlotIndexForTab(id) !== -1);
 
         // Update status dot
         const statusDot = li.querySelector('.status-dot');
@@ -637,7 +1108,7 @@ class App {
         if (id === this.activeInstanceId) {
           li.classList.add('active');
         }
-        if (this.visibleInstances.has(id)) {
+        if (this._getSlotIndexForTab(id) !== -1) {
           li.classList.add('visible');
         }
 
@@ -827,6 +1298,9 @@ class App {
     try {
       await fetch(`/api/instances/${id}`, { method: 'DELETE' });
 
+      // Remove from slots first
+      this._removeTabFromAllSlots(id);
+
       // Clean up debounce timer
       if (instance.waitingDebounceTimer) {
         clearTimeout(instance.waitingDebounceTimer);
@@ -836,21 +1310,19 @@ class App {
       instance.terminal.dispose();
       instance.wrapper.remove();
       this.instances.delete(id);
-      this.visibleInstances.delete(id);
 
-      // Select another instance if this was active
+      // Update active instance if needed
       if (this.activeInstanceId === id) {
         this.activeInstanceId = null;
-        const remaining = Array.from(this.instances.keys());
-        if (remaining.length > 0) {
-          this._selectInstance(remaining[0]);
-        } else {
-          this.emptyState.style.display = 'block';
-          document.title = 'Claude Code UI';
+
+        // Try to focus another tab in the same slot
+        const slot = this.slots[this.activeSlotIndex];
+        if (slot && slot.activeTabId && !slot.activeTabId.startsWith('md-')) {
+          this.activeInstanceId = slot.activeTabId;
         }
       }
 
-      this._updateVisibleTerminals();
+      this._updateEmptyState();
       this._renderInstancesList();
       this._showToast('Instance fermée', 'success');
 
@@ -942,25 +1414,25 @@ class App {
   }
 
   async _showMarkdownPanel(projectPath, projectName) {
-    // If panel already exists for same project, just close it (toggle)
-    if (this.markdownPanel && this.markdownPanel.projectPath === projectPath) {
-      this._closeMarkdownPanel();
+    // Generate tab ID
+    const tabId = 'md-' + projectPath.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+
+    // If panel already exists, toggle it (close if open, or focus if exists elsewhere)
+    if (this.markdownPanels.has(tabId)) {
+      const existingSlotIndex = this._getSlotIndexForTab(tabId);
+      if (existingSlotIndex !== -1) {
+        // Close it (toggle behavior)
+        this._closeMarkdownTab(tabId);
+      } else {
+        // Panel exists but not in slot - add to current slot
+        this._addTabToSlot(this.activeSlotIndex, tabId, true);
+      }
       return;
     }
 
-    // Close existing panel if different project
-    if (this.markdownPanel) {
-      this._closeMarkdownPanel();
-    }
-
-    // Switch to split mode if in single mode to show both terminal and markdown
-    if (this.layoutMode === 'single' && this.visibleInstances.size > 0) {
-      this._setLayoutMode('split');
-    }
-
-    // Create markdown panel wrapper
+    // Create markdown panel wrapper (without close button - handled by tab)
     const wrapper = document.createElement('div');
-    wrapper.className = 'terminal-wrapper markdown-panel visible';
+    wrapper.className = 'markdown-panel';
     wrapper.innerHTML = `
       <div class="markdown-panel-header">
         <div class="markdown-panel-title">
@@ -970,30 +1442,36 @@ class App {
             <option value="">Chargement...</option>
           </select>
         </div>
-        <button class="markdown-panel-close" title="Fermer">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
       </div>
       <div class="markdown-panel-content">
         <p class="markdown-placeholder">Chargement...</p>
       </div>
     `;
-    this.terminalContainer.appendChild(wrapper);
 
     const fileSelect = wrapper.querySelector('.markdown-file-select');
     const content = wrapper.querySelector('.markdown-panel-content');
-    const closeBtn = wrapper.querySelector('.markdown-panel-close');
 
-    this.markdownPanel = { wrapper, projectPath, projectName, fileSelect, content };
+    const panel = {
+      id: tabId,
+      projectPath,
+      projectName,
+      wrapper,
+      fileSelect,
+      content
+    };
 
-    // Bind events
-    closeBtn.addEventListener('click', () => this._closeMarkdownPanel());
+    this.markdownPanels.set(tabId, panel);
+
+    // Bind file select change
     fileSelect.addEventListener('change', () => {
       const file = fileSelect.value;
       if (file) {
-        this._loadMarkdownPanelContent(file);
+        this._loadMarkdownPanelContent(tabId, file);
       }
     });
+
+    // Add to current slot as new tab
+    this._addTabToSlot(this.activeSlotIndex, tabId, true);
 
     // Load markdown files
     try {
@@ -1023,30 +1501,21 @@ class App {
       const preferredFiles = ['CLAUDE.md', 'README.md', 'readme.md'];
       const autoLoadFile = preferredFiles.find(f => data.files.includes(f)) || data.files[0];
       fileSelect.value = autoLoadFile;
-      this._loadMarkdownPanelContent(autoLoadFile);
+      this._loadMarkdownPanelContent(tabId, autoLoadFile);
 
     } catch (error) {
       content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
-
-    this._updateVisibleTerminals();
   }
 
-  _closeMarkdownPanel() {
-    if (!this.markdownPanel) return;
+  async _loadMarkdownPanelContent(tabId, filename) {
+    const panel = this.markdownPanels.get(tabId);
+    if (!panel) return;
 
-    this.markdownPanel.wrapper.remove();
-    this.markdownPanel = null;
-    this._updateVisibleTerminals();
-  }
-
-  async _loadMarkdownPanelContent(filename) {
-    if (!this.markdownPanel) return;
-
-    this.markdownPanel.content.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
+    panel.content.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
 
     try {
-      const response = await fetch(`/api/projects/markdown/content?path=${encodeURIComponent(this.markdownPanel.projectPath)}&file=${encodeURIComponent(filename)}`);
+      const response = await fetch(`/api/projects/markdown/content?path=${encodeURIComponent(panel.projectPath)}&file=${encodeURIComponent(filename)}`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -1054,10 +1523,10 @@ class App {
       }
 
       // Render markdown
-      this.markdownPanel.content.innerHTML = marked.parse(data.content);
+      panel.content.innerHTML = marked.parse(data.content);
 
     } catch (error) {
-      this.markdownPanel.content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
+      panel.content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
   }
 
