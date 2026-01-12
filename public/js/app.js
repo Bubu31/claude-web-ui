@@ -497,6 +497,7 @@ class App {
       const instance = this.instances.get(slot.activeTabId);
       if (instance && instance.terminal) {
         instance.terminal.fit();
+        instance.terminal.scrollToBottom();
         instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
       }
     });
@@ -762,9 +763,10 @@ class App {
       const instance = this.instances.get(tabId);
       if (instance && instance.wrapper) {
         instance.wrapper.classList.add('visible');
-        // Fit terminal after becoming visible
+        // Fit terminal after becoming visible and scroll to bottom
         setTimeout(() => {
           instance.terminal.fit();
+          instance.terminal.scrollToBottom();
           instance.ws.sendResize(instance.terminal.cols, instance.terminal.rows);
         }, 50);
       }

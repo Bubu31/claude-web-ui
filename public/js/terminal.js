@@ -157,6 +157,10 @@ class TerminalWrapper {
     this.terminal.blur();
   }
 
+  scrollToBottom() {
+    this.terminal.scrollToBottom();
+  }
+
   get cols() {
     return this.terminal.cols;
   }
