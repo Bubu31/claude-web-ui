@@ -44,13 +44,8 @@ class App {
     this.cookieErrorMessage = document.getElementById('cookie-error-message');
     this.cookieStatus = document.getElementById('cookie-status');
 
-    // Markdown modal elements
-    this.markdownModalOverlay = document.getElementById('markdown-modal-overlay');
-    this.markdownModalClose = document.getElementById('markdown-modal-close');
-    this.markdownProjectName = document.getElementById('markdown-project-name');
-    this.markdownFileSelect = document.getElementById('markdown-file-select');
-    this.markdownContent = document.getElementById('markdown-content');
-    this.currentMarkdownProject = null;
+    // Markdown panel (in split view)
+    this.markdownPanel = null; // { wrapper, projectPath, projectName }
 
     // Layout control buttons
     this.layoutSingleBtn = document.getElementById('layout-single');
@@ -96,8 +91,9 @@ class App {
         if (!this.cookieModalOverlay.classList.contains('hidden')) {
           this._hideCookieModal();
         }
-        if (!this.markdownModalOverlay.classList.contains('hidden')) {
-          this._hideMarkdownModal();
+        // Close markdown panel with Escape
+        if (this.markdownPanel) {
+          this._closeMarkdownPanel();
         }
       }
     });
@@ -111,20 +107,6 @@ class App {
     this.cookieModalOverlay.addEventListener('click', (e) => {
       if (e.target === this.cookieModalOverlay) {
         this._hideCookieModal();
-      }
-    });
-
-    // Markdown modal events
-    this.markdownModalClose.addEventListener('click', () => this._hideMarkdownModal());
-    this.markdownModalOverlay.addEventListener('click', (e) => {
-      if (e.target === this.markdownModalOverlay) {
-        this._hideMarkdownModal();
-      }
-    });
-    this.markdownFileSelect.addEventListener('change', () => {
-      const file = this.markdownFileSelect.value;
-      if (file && this.currentMarkdownProject) {
-        this._loadMarkdownContent(this.currentMarkdownProject, file);
       }
     });
 
@@ -563,6 +545,11 @@ class App {
       w.classList.remove('visible', 'focused');
     });
 
+    // Hide markdown panel
+    if (this.markdownPanel) {
+      this.markdownPanel.wrapper.classList.remove('visible');
+    }
+
     // Show visible terminals
     this.visibleInstances.forEach(id => {
       const instance = this.instances.get(id);
@@ -574,8 +561,14 @@ class App {
       }
     });
 
-    // Show/hide empty state
-    this.emptyState.style.display = this.visibleInstances.size === 0 ? 'block' : 'none';
+    // Show markdown panel if it exists and we have space
+    if (this.markdownPanel) {
+      this.markdownPanel.wrapper.classList.add('visible');
+    }
+
+    // Show/hide empty state (hide if terminals or markdown panel visible)
+    const hasContent = this.visibleInstances.size > 0 || this.markdownPanel;
+    this.emptyState.style.display = hasContent ? 'none' : 'block';
 
     // Fit all visible terminals after layout change
     setTimeout(() => this._fitVisibleTerminals(), 50);
@@ -669,7 +662,7 @@ class App {
 
         li.querySelector('.md-btn').addEventListener('click', (e) => {
           e.stopPropagation();
-          this._showMarkdownModal(instance.cwd, folderName);
+          this._showMarkdownPanel(instance.cwd, folderName);
         });
 
         li.querySelector('.close-btn').addEventListener('click', (e) => {
@@ -765,7 +758,7 @@ class App {
       // Click on markdown button opens markdown modal
       li.querySelector('.md-btn').addEventListener('click', (e) => {
         e.stopPropagation();
-        this._showMarkdownModal(project.path, project.name);
+        this._showMarkdownPanel(project.path, project.name);
       });
 
       this.projectsList.appendChild(li);
@@ -948,13 +941,61 @@ class App {
     }
   }
 
-  async _showMarkdownModal(projectPath, projectName) {
-    this.currentMarkdownProject = projectPath;
-    this.markdownProjectName.textContent = projectName;
-    this.markdownContent.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
-    this.markdownFileSelect.innerHTML = '<option value="">Choisir un fichier...</option>';
-    this.markdownModalOverlay.classList.remove('hidden');
+  async _showMarkdownPanel(projectPath, projectName) {
+    // If panel already exists for same project, just close it (toggle)
+    if (this.markdownPanel && this.markdownPanel.projectPath === projectPath) {
+      this._closeMarkdownPanel();
+      return;
+    }
 
+    // Close existing panel if different project
+    if (this.markdownPanel) {
+      this._closeMarkdownPanel();
+    }
+
+    // Switch to split mode if in single mode to show both terminal and markdown
+    if (this.layoutMode === 'single' && this.visibleInstances.size > 0) {
+      this._setLayoutMode('split');
+    }
+
+    // Create markdown panel wrapper
+    const wrapper = document.createElement('div');
+    wrapper.className = 'terminal-wrapper markdown-panel visible';
+    wrapper.innerHTML = `
+      <div class="markdown-panel-header">
+        <div class="markdown-panel-title">
+          <i class="fa-brands fa-markdown"></i>
+          <span class="markdown-panel-name">${projectName}</span>
+          <select class="markdown-file-select">
+            <option value="">Chargement...</option>
+          </select>
+        </div>
+        <button class="markdown-panel-close" title="Fermer">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="markdown-panel-content">
+        <p class="markdown-placeholder">Chargement...</p>
+      </div>
+    `;
+    this.terminalContainer.appendChild(wrapper);
+
+    const fileSelect = wrapper.querySelector('.markdown-file-select');
+    const content = wrapper.querySelector('.markdown-panel-content');
+    const closeBtn = wrapper.querySelector('.markdown-panel-close');
+
+    this.markdownPanel = { wrapper, projectPath, projectName, fileSelect, content };
+
+    // Bind events
+    closeBtn.addEventListener('click', () => this._closeMarkdownPanel());
+    fileSelect.addEventListener('change', () => {
+      const file = fileSelect.value;
+      if (file) {
+        this._loadMarkdownPanelContent(file);
+      }
+    });
+
+    // Load markdown files
     try {
       const response = await fetch(`/api/projects/markdown?path=${encodeURIComponent(projectPath)}`);
       const data = await response.json();
@@ -964,39 +1005,48 @@ class App {
       }
 
       if (data.files.length === 0) {
-        this.markdownContent.innerHTML = '<p class="markdown-placeholder">Aucun fichier markdown dans ce projet</p>';
+        content.innerHTML = '<p class="markdown-placeholder">Aucun fichier markdown dans ce projet</p>';
+        fileSelect.innerHTML = '<option value="">Aucun fichier</option>';
         return;
       }
 
       // Populate select
+      fileSelect.innerHTML = '';
       data.files.forEach(file => {
         const option = document.createElement('option');
         option.value = file;
         option.textContent = file;
-        this.markdownFileSelect.appendChild(option);
+        fileSelect.appendChild(option);
       });
 
       // Auto-load first file (prefer CLAUDE.md or README.md)
       const preferredFiles = ['CLAUDE.md', 'README.md', 'readme.md'];
       const autoLoadFile = preferredFiles.find(f => data.files.includes(f)) || data.files[0];
-      this.markdownFileSelect.value = autoLoadFile;
-      this._loadMarkdownContent(projectPath, autoLoadFile);
+      fileSelect.value = autoLoadFile;
+      this._loadMarkdownPanelContent(autoLoadFile);
 
     } catch (error) {
-      this.markdownContent.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
+      content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
+
+    this._updateVisibleTerminals();
   }
 
-  _hideMarkdownModal() {
-    this.markdownModalOverlay.classList.add('hidden');
-    this.currentMarkdownProject = null;
+  _closeMarkdownPanel() {
+    if (!this.markdownPanel) return;
+
+    this.markdownPanel.wrapper.remove();
+    this.markdownPanel = null;
+    this._updateVisibleTerminals();
   }
 
-  async _loadMarkdownContent(projectPath, filename) {
-    this.markdownContent.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
+  async _loadMarkdownPanelContent(filename) {
+    if (!this.markdownPanel) return;
+
+    this.markdownPanel.content.innerHTML = '<p class="markdown-placeholder">Chargement...</p>';
 
     try {
-      const response = await fetch(`/api/projects/markdown/content?path=${encodeURIComponent(projectPath)}&file=${encodeURIComponent(filename)}`);
+      const response = await fetch(`/api/projects/markdown/content?path=${encodeURIComponent(this.markdownPanel.projectPath)}&file=${encodeURIComponent(filename)}`);
       const data = await response.json();
 
       if (!response.ok) {
@@ -1004,10 +1054,10 @@ class App {
       }
 
       // Render markdown
-      this.markdownContent.innerHTML = marked.parse(data.content);
+      this.markdownPanel.content.innerHTML = marked.parse(data.content);
 
     } catch (error) {
-      this.markdownContent.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
+      this.markdownPanel.content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
   }
 
