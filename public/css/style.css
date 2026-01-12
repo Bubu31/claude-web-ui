@@ -583,6 +583,12 @@ body {
   bottom: 0;
 }
 
+/* Single layout - markdown panel needs flex display */
+.terminal-container.layout-single .terminal-wrapper.markdown-panel.visible {
+  display: flex;
+  flex-direction: column;
+}
+
 /* Split layout - two terminals side by side */
 .terminal-container.layout-split .terminal-wrapper.visible {
   display: flex;
@@ -611,6 +617,12 @@ body {
 
 .terminal-container.layout-quad .terminal-wrapper.visible:nth-child(n+3) {
   border-bottom: none;
+}
+
+/* Quad layout - markdown panel needs flex column */
+.terminal-container.layout-quad .terminal-wrapper.markdown-panel.visible {
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Focused terminal indicator */
@@ -1115,6 +1127,7 @@ body {
 .markdown-panel {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--bg-terminal);
 }
 
@@ -1190,6 +1203,7 @@ body {
 
 .markdown-panel-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 1rem;
   background: var(--bg-primary);
