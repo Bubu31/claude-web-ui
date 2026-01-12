@@ -651,17 +651,25 @@ class App {
         li.innerHTML = `
           <span class="status-dot ${statusClass}"></span>
           <span class="instance-name" title="${instance.cwd}">${folderName}</span>
+          <button class="md-btn" title="Voir les fichiers markdown">
+            <i class="fa-brands fa-markdown"></i>
+          </button>
           <button class="close-btn" title="Fermer">
             <i class="fa-solid fa-xmark"></i>
           </button>
         `;
 
         li.addEventListener('click', (e) => {
-          if (!e.target.closest('.close-btn')) {
+          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn')) {
             // Ctrl+click adds to split view, normal click replaces
             const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
             this._selectInstance(id, addToVisible);
           }
+        });
+
+        li.querySelector('.md-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._showMarkdownModal(instance.cwd, folderName);
         });
 
         li.querySelector('.close-btn').addEventListener('click', (e) => {
