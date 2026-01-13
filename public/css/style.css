@@ -1578,7 +1578,8 @@ body {
   50% { transform: scale(1.2); }
 }
 
-/* Voice language selector */
+/* Voice device and language selectors */
+.voice-device-select,
 .voice-lang-select {
   padding: 0.3rem 0.5rem;
   background: var(--bg-primary);
@@ -1587,9 +1588,17 @@ body {
   color: var(--text);
   font-size: 0.75rem;
   cursor: pointer;
+}
+
+.voice-device-select {
+  max-width: 150px;
+}
+
+.voice-lang-select {
   max-width: 90px;
 }
 
+.voice-device-select:focus,
 .voice-lang-select:focus {
   outline: none;
   border-color: var(--accent);

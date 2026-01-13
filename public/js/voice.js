@@ -1,6 +1,7 @@
 class VoiceRecorder {
   constructor(options = {}) {
     this.lang = options.lang || 'french';
+    this.deviceId = options.deviceId || null; // Selected microphone device ID
     this.mediaRecorder = null;
     this.audioChunks = [];
     this.stream = null;
@@ -11,6 +12,7 @@ class VoiceRecorder {
     this._stopCallbacks = [];
     this._resultCallbacks = [];
     this._errorCallbacks = [];
+    this._devicesChangedCallbacks = [];
   }
 
   _checkSupport() {
@@ -28,13 +30,21 @@ class VoiceRecorder {
     }
 
     try {
+      // Build audio constraints
+      const audioConstraints = {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: 16000,
+      };
+
+      // Add device ID if specified
+      if (this.deviceId) {
+        audioConstraints.deviceId = { exact: this.deviceId };
+      }
+
       // Request microphone access
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-        }
+        audio: audioConstraints
       });
 
       // Create MediaRecorder
@@ -110,6 +120,54 @@ class VoiceRecorder {
 
   setLanguage(lang) {
     this.lang = lang;
+  }
+
+  setDevice(deviceId) {
+    this.deviceId = deviceId;
+  }
+
+  // Get list of available audio input devices
+  async getAudioDevices() {
+    if (!this.isSupported) {
+      return [];
+    }
+
+    try {
+      // First request permission to access microphone (required to get device labels)
+      // We use a temporary stream just to get permission
+      const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      tempStream.getTracks().forEach(track => track.stop());
+
+      // Now enumerate devices
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(device => device.kind === 'audioinput');
+
+      return audioInputs.map(device => ({
+        deviceId: device.deviceId,
+        label: device.label || `Microphone ${device.deviceId.slice(0, 8)}...`,
+        isDefault: device.deviceId === 'default'
+      }));
+    } catch (error) {
+      console.error('[Voice] Error enumerating devices:', error);
+      return [];
+    }
+  }
+
+  // Listen for device changes (plug/unplug)
+  startDeviceWatcher() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.addEventListener) {
+      return;
+    }
+
+    navigator.mediaDevices.addEventListener('devicechange', async () => {
+      const devices = await this.getAudioDevices();
+      this._emit('devicesChanged', devices);
+    });
+  }
+
+  onDevicesChanged(callback) {
+    this._devicesChangedCallbacks.push(callback);
+    return () => this._removeCallback(this._devicesChangedCallbacks, callback);
   }
 
   _getSupportedMimeType() {
@@ -199,6 +257,7 @@ class VoiceRecorder {
       'result': this._resultCallbacks,
       'error': this._errorCallbacks,
       'transcribing': this._transcribingCallbacks || [],
+      'devicesChanged': this._devicesChangedCallbacks || [],
     };
 
     if (callbacks[event]) {

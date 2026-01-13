@@ -153,9 +153,10 @@ class App {
       return;
     }
 
-    // Initialize voice recorder
+    // Initialize voice recorder with saved preferences
     this.voiceRecorder = new VoiceRecorder({
       lang: localStorage.getItem('voiceLang') || 'french',
+      deviceId: localStorage.getItem('voiceDeviceId') || null,
     });
 
     if (!this.voiceRecorder.isSupported) {
@@ -177,6 +178,9 @@ class App {
         <i class="fa-solid fa-microphone"></i>
         <span class="voice-text">Parler</span>
       </button>
+      <select id="voice-device" class="voice-device-select" title="Source microphone">
+        <option value="">Chargement...</option>
+      </select>
       <select id="voice-lang" class="voice-lang-select" title="Langue de reconnaissance">
         ${languages.map(l => `<option value="${l.code}" ${l.code === currentLang ? 'selected' : ''}>${l.label}</option>`).join('')}
       </select>
@@ -184,16 +188,33 @@ class App {
 
     // Get elements
     this.voiceBtn = document.getElementById('voice-btn');
+    this.voiceDeviceSelect = document.getElementById('voice-device');
     this.voiceLangSelect = document.getElementById('voice-lang');
 
     // Bind voice button click
     this.voiceBtn.addEventListener('click', () => this._toggleVoiceRecording());
+
+    // Bind device change
+    this.voiceDeviceSelect.addEventListener('change', (e) => {
+      const deviceId = e.target.value || null;
+      this.voiceRecorder.setDevice(deviceId);
+      localStorage.setItem('voiceDeviceId', deviceId || '');
+    });
 
     // Bind language change
     this.voiceLangSelect.addEventListener('change', (e) => {
       const newLang = e.target.value;
       this.voiceRecorder.setLanguage(newLang);
       localStorage.setItem('voiceLang', newLang);
+    });
+
+    // Load available audio devices
+    this._loadAudioDevices();
+
+    // Start watching for device changes
+    this.voiceRecorder.startDeviceWatcher();
+    this.voiceRecorder.onDevicesChanged((devices) => {
+      this._updateAudioDevicesList(devices);
     });
 
     // Voice recorder events
@@ -275,6 +296,49 @@ class App {
     activeInstance.waiting = false;
     activeInstance.outputBuffer = '';
     this._renderInstancesList();
+  }
+
+  async _loadAudioDevices() {
+    if (!this.voiceRecorder || !this.voiceDeviceSelect) return;
+
+    try {
+      const devices = await this.voiceRecorder.getAudioDevices();
+      this._updateAudioDevicesList(devices);
+    } catch (error) {
+      console.error('Failed to load audio devices:', error);
+      this.voiceDeviceSelect.innerHTML = '<option value="">Erreur</option>';
+    }
+  }
+
+  _updateAudioDevicesList(devices) {
+    if (!this.voiceDeviceSelect) return;
+
+    const savedDeviceId = localStorage.getItem('voiceDeviceId') || '';
+
+    if (devices.length === 0) {
+      this.voiceDeviceSelect.innerHTML = '<option value="">Aucun micro</option>';
+      return;
+    }
+
+    // Build options HTML
+    let optionsHtml = '<option value="">Par défaut</option>';
+    devices.forEach(device => {
+      // Skip the "default" device since we already have a "Par défaut" option
+      if (device.deviceId === 'default') return;
+
+      const selected = device.deviceId === savedDeviceId ? 'selected' : '';
+      const label = device.label.length > 30 ? device.label.substring(0, 30) + '...' : device.label;
+      optionsHtml += `<option value="${device.deviceId}" ${selected}>${label}</option>`;
+    });
+
+    this.voiceDeviceSelect.innerHTML = optionsHtml;
+
+    // Verify saved device still exists, otherwise reset
+    if (savedDeviceId && !devices.some(d => d.deviceId === savedDeviceId)) {
+      localStorage.removeItem('voiceDeviceId');
+      this.voiceRecorder.setDevice(null);
+      this.voiceDeviceSelect.value = '';
+    }
   }
 
   _hasDraggedImage(e) {
