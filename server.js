@@ -5,7 +5,10 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
+import { execFileSync } from 'child_process';
 import multer from 'multer';
+import ffmpegPath from 'ffmpeg-static';
+import WaveFile from 'wavefile';
 import config from './src/config.js';
 import PtyManager from './src/pty-manager.js';
 import claudeUsage from './src/claude-usage.js';
@@ -288,6 +291,35 @@ async function getTranscriber() {
   return transcriber;
 }
 
+// Convert audio to raw samples for Whisper
+function convertAudioToSamples(inputPath) {
+  const wavPath = inputPath.replace(/\.[^.]+$/, '.wav');
+
+  // Convert to 16kHz mono WAV using ffmpeg
+  execFileSync(ffmpegPath, [
+    '-i', inputPath,
+    '-ar', '16000',      // 16kHz sample rate (Whisper expects this)
+    '-ac', '1',          // Mono
+    '-c:a', 'pcm_s16le', // 16-bit PCM
+    '-y',                // Overwrite output
+    wavPath
+  ], { stdio: 'pipe' });
+
+  // Read WAV file and extract samples
+  const wavBuffer = readFileSync(wavPath);
+  const wav = new WaveFile.WaveFile(wavBuffer);
+
+  // Get samples as Float32Array (normalized to -1.0 to 1.0)
+  const samples = wav.getSamples(false, Float32Array);
+
+  // Clean up wav file
+  try {
+    unlinkSync(wavPath);
+  } catch (e) {}
+
+  return samples;
+}
+
 // Transcribe audio endpoint
 app.post('/api/transcribe', audioUpload.single('audio'), async (req, res) => {
   if (!req.file) {
@@ -298,14 +330,28 @@ app.post('/api/transcribe', audioUpload.single('audio'), async (req, res) => {
   const lang = req.body.lang || 'french';
 
   try {
+    // Convert audio to raw samples
+    const audioSamples = convertAudioToSamples(audioPath);
+
+    // Get Whisper transcriber
     const whisper = await getTranscriber();
 
-    const result = await whisper(audioPath, {
+    // Transcribe using raw audio data
+    const result = await whisper(audioSamples, {
       language: lang,
       task: 'transcribe',
     });
 
-    // Clean up the audio file
+    // Filter out Whisper hallucination tags (music, applause, etc.)
+    let cleanText = result.text || '';
+    cleanText = cleanText
+      .replace(/\[.*?\]/gi, '')  // Remove [music], [Musique], [applause], etc.
+      .replace(/\(.*?\)/gi, '')  // Remove (music), (Musique), etc.
+      .replace(/\*.*?\*/gi, '')  // Remove *music*, etc.
+      .replace(/\s+/g, ' ')      // Normalize whitespace
+      .trim();
+
+    // Clean up the original audio file
     try {
       unlinkSync(audioPath);
     } catch (e) {
@@ -313,7 +359,7 @@ app.post('/api/transcribe', audioUpload.single('audio'), async (req, res) => {
     }
 
     res.json({
-      text: result.text,
+      text: cleanText,
       chunks: result.chunks || []
     });
   } catch (error) {
