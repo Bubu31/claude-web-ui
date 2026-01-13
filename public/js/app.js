@@ -209,6 +209,12 @@ class App {
       this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
     });
 
+    // Show interim results (what's being said in real-time)
+    this.voiceRecognition.onInterim(({ transcript }) => {
+      const shortText = transcript.length > 20 ? transcript.substring(0, 20) + '...' : transcript;
+      this.voiceBtn.querySelector('.voice-text').textContent = shortText || 'Ecoute...';
+    });
+
     this.voiceRecognition.onResult(({ transcript, confidence }) => {
       this._sendVoiceInput(transcript);
     });
@@ -221,8 +227,13 @@ class App {
         this._showToast('Microphone non autorisé', 'error');
       } else if (error === 'no-speech') {
         this._showToast('Aucune parole détectée', 'error');
+      } else if (error === 'audio-capture') {
+        this._showToast('Erreur de capture audio - vérifiez votre micro', 'error');
+      } else if (error === 'network') {
+        this._showToast('Erreur réseau - connexion requise', 'error');
       } else if (error !== 'aborted') {
         console.error('Voice recognition error:', error);
+        this._showToast('Erreur: ' + error, 'error');
       }
     });
   }

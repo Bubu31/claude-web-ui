@@ -2,7 +2,7 @@ class VoiceRecognition {
   constructor(options = {}) {
     this.lang = options.lang || 'fr-FR';
     this.continuous = options.continuous || false;
-    this.interimResults = options.interimResults || false;
+    this.interimResults = true; // Always true for better UX
 
     this.recognition = null;
     this.isListening = false;
@@ -12,6 +12,9 @@ class VoiceRecognition {
     this._startCallbacks = [];
     this._endCallbacks = [];
     this._errorCallbacks = [];
+    this._interimCallbacks = [];
+
+    this._lastInterimTranscript = '';
 
     if (this.isSupported) {
       this._initRecognition();
@@ -29,31 +32,82 @@ class VoiceRecognition {
     this.recognition.lang = this.lang;
     this.recognition.continuous = this.continuous;
     this.recognition.interimResults = this.interimResults;
+    this.recognition.maxAlternatives = 1;
 
     this.recognition.onstart = () => {
+      console.log('[Voice] Recognition started');
       this.isListening = true;
+      this._lastInterimTranscript = '';
       this._emit('start');
     };
 
+    this.recognition.onaudiostart = () => {
+      console.log('[Voice] Audio capture started');
+    };
+
+    this.recognition.onsoundstart = () => {
+      console.log('[Voice] Sound detected');
+    };
+
+    this.recognition.onspeechstart = () => {
+      console.log('[Voice] Speech detected');
+    };
+
+    this.recognition.onspeechend = () => {
+      console.log('[Voice] Speech ended');
+    };
+
+    this.recognition.onsoundend = () => {
+      console.log('[Voice] Sound ended');
+    };
+
+    this.recognition.onaudioend = () => {
+      console.log('[Voice] Audio capture ended');
+    };
+
     this.recognition.onend = () => {
+      console.log('[Voice] Recognition ended');
       this.isListening = false;
       this._emit('end');
     };
 
     this.recognition.onresult = (event) => {
-      const results = event.results;
-      const lastResult = results[results.length - 1];
+      let interimTranscript = '';
+      let finalTranscript = '';
 
-      if (lastResult.isFinal) {
-        const transcript = lastResult[0].transcript;
-        const confidence = lastResult[0].confidence;
-        this._emit('result', { transcript, confidence });
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        const transcript = result[0].transcript;
+
+        if (result.isFinal) {
+          finalTranscript += transcript;
+          console.log('[Voice] Final result:', transcript);
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      // Emit interim results for UI feedback
+      if (interimTranscript && interimTranscript !== this._lastInterimTranscript) {
+        this._lastInterimTranscript = interimTranscript;
+        this._emit('interim', { transcript: interimTranscript });
+      }
+
+      // Emit final result
+      if (finalTranscript) {
+        const confidence = event.results[event.results.length - 1][0].confidence;
+        this._emit('result', { transcript: finalTranscript, confidence });
       }
     };
 
     this.recognition.onerror = (event) => {
+      console.error('[Voice] Error:', event.error, event.message);
       this.isListening = false;
       this._emit('error', event.error);
+    };
+
+    this.recognition.onnomatch = () => {
+      console.log('[Voice] No match found');
     };
   }
 
@@ -68,9 +122,12 @@ class VoiceRecognition {
     }
 
     try {
+      // Recreate recognition instance to avoid stale state issues
+      this._initRecognition();
       this.recognition.start();
       return true;
     } catch (e) {
+      console.error('[Voice] Start error:', e);
       this._emit('error', e.message);
       return false;
     }
@@ -100,6 +157,11 @@ class VoiceRecognition {
     return () => this._removeCallback(this._resultCallbacks, callback);
   }
 
+  onInterim(callback) {
+    this._interimCallbacks.push(callback);
+    return () => this._removeCallback(this._interimCallbacks, callback);
+  }
+
   onStart(callback) {
     this._startCallbacks.push(callback);
     return () => this._removeCallback(this._startCallbacks, callback);
@@ -121,6 +183,7 @@ class VoiceRecognition {
       'end': this._endCallbacks,
       'result': this._resultCallbacks,
       'error': this._errorCallbacks,
+      'interim': this._interimCallbacks,
     };
 
     if (callbacks[event]) {
