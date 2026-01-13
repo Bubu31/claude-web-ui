@@ -1,165 +1,169 @@
-class VoiceRecognition {
+class VoiceRecorder {
   constructor(options = {}) {
-    this.lang = options.lang || 'fr-FR';
-    this.continuous = options.continuous || false;
-    this.interimResults = true; // Always true for better UX
-
-    this.recognition = null;
-    this.isListening = false;
+    this.lang = options.lang || 'french';
+    this.mediaRecorder = null;
+    this.audioChunks = [];
+    this.stream = null;
+    this.isRecording = false;
     this.isSupported = this._checkSupport();
 
-    this._resultCallbacks = [];
     this._startCallbacks = [];
-    this._endCallbacks = [];
+    this._stopCallbacks = [];
+    this._resultCallbacks = [];
     this._errorCallbacks = [];
-    this._interimCallbacks = [];
-
-    this._lastInterimTranscript = '';
-
-    if (this.isSupported) {
-      this._initRecognition();
-    }
   }
 
   _checkSupport() {
-    return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
   }
 
-  _initRecognition() {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    this.recognition = new SpeechRecognition();
-
-    this.recognition.lang = this.lang;
-    this.recognition.continuous = this.continuous;
-    this.recognition.interimResults = this.interimResults;
-    this.recognition.maxAlternatives = 1;
-
-    this.recognition.onstart = () => {
-      console.log('[Voice] Recognition started');
-      this.isListening = true;
-      this._lastInterimTranscript = '';
-      this._emit('start');
-    };
-
-    this.recognition.onaudiostart = () => {
-      console.log('[Voice] Audio capture started');
-    };
-
-    this.recognition.onsoundstart = () => {
-      console.log('[Voice] Sound detected');
-    };
-
-    this.recognition.onspeechstart = () => {
-      console.log('[Voice] Speech detected');
-    };
-
-    this.recognition.onspeechend = () => {
-      console.log('[Voice] Speech ended');
-    };
-
-    this.recognition.onsoundend = () => {
-      console.log('[Voice] Sound ended');
-    };
-
-    this.recognition.onaudioend = () => {
-      console.log('[Voice] Audio capture ended');
-    };
-
-    this.recognition.onend = () => {
-      console.log('[Voice] Recognition ended');
-      this.isListening = false;
-      this._emit('end');
-    };
-
-    this.recognition.onresult = (event) => {
-      let interimTranscript = '';
-      let finalTranscript = '';
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i];
-        const transcript = result[0].transcript;
-
-        if (result.isFinal) {
-          finalTranscript += transcript;
-          console.log('[Voice] Final result:', transcript);
-        } else {
-          interimTranscript += transcript;
-        }
-      }
-
-      // Emit interim results for UI feedback
-      if (interimTranscript && interimTranscript !== this._lastInterimTranscript) {
-        this._lastInterimTranscript = interimTranscript;
-        this._emit('interim', { transcript: interimTranscript });
-      }
-
-      // Emit final result
-      if (finalTranscript) {
-        const confidence = event.results[event.results.length - 1][0].confidence;
-        this._emit('result', { transcript: finalTranscript, confidence });
-      }
-    };
-
-    this.recognition.onerror = (event) => {
-      console.error('[Voice] Error:', event.error, event.message);
-      this.isListening = false;
-      this._emit('error', event.error);
-    };
-
-    this.recognition.onnomatch = () => {
-      console.log('[Voice] No match found');
-    };
-  }
-
-  start() {
+  async start() {
     if (!this.isSupported) {
       this._emit('error', 'not-supported');
       return false;
     }
 
-    if (this.isListening) {
+    if (this.isRecording) {
       return false;
     }
 
     try {
-      // Recreate recognition instance to avoid stale state issues
-      this._initRecognition();
-      this.recognition.start();
+      // Request microphone access
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: 16000,
+        }
+      });
+
+      // Create MediaRecorder
+      this.audioChunks = [];
+      this.mediaRecorder = new MediaRecorder(this.stream, {
+        mimeType: this._getSupportedMimeType(),
+      });
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          this.audioChunks.push(event.data);
+        }
+      };
+
+      this.mediaRecorder.onstop = async () => {
+        this.isRecording = false;
+        this._emit('stop');
+
+        // Create blob from chunks
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+
+        // Stop all tracks
+        if (this.stream) {
+          this.stream.getTracks().forEach(track => track.stop());
+          this.stream = null;
+        }
+
+        // Send to server for transcription
+        await this._transcribe(audioBlob);
+      };
+
+      this.mediaRecorder.onerror = (event) => {
+        console.error('[Voice] MediaRecorder error:', event.error);
+        this.isRecording = false;
+        this._emit('error', event.error?.message || 'Recording error');
+      };
+
+      // Start recording
+      this.mediaRecorder.start(100); // Collect data every 100ms
+      this.isRecording = true;
+      this._emit('start');
       return true;
-    } catch (e) {
-      console.error('[Voice] Start error:', e);
-      this._emit('error', e.message);
+
+    } catch (error) {
+      console.error('[Voice] Error starting recording:', error);
+      if (error.name === 'NotAllowedError') {
+        this._emit('error', 'not-allowed');
+      } else if (error.name === 'NotFoundError') {
+        this._emit('error', 'no-microphone');
+      } else {
+        this._emit('error', error.message);
+      }
       return false;
     }
   }
 
   stop() {
-    if (this.recognition && this.isListening) {
-      this.recognition.stop();
+    if (this.mediaRecorder && this.isRecording) {
+      this.mediaRecorder.stop();
     }
   }
 
   abort() {
-    if (this.recognition && this.isListening) {
-      this.recognition.abort();
+    if (this.mediaRecorder && this.isRecording) {
+      this.mediaRecorder.stop();
+      this.audioChunks = []; // Clear chunks to prevent transcription
+    }
+    if (this.stream) {
+      this.stream.getTracks().forEach(track => track.stop());
+      this.stream = null;
     }
   }
 
   setLanguage(lang) {
     this.lang = lang;
-    if (this.recognition) {
-      this.recognition.lang = lang;
+  }
+
+  _getSupportedMimeType() {
+    const mimeTypes = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ];
+
+    for (const mimeType of mimeTypes) {
+      if (MediaRecorder.isTypeSupported(mimeType)) {
+        return mimeType;
+      }
     }
+    return 'audio/webm';
   }
 
-  onResult(callback) {
-    this._resultCallbacks.push(callback);
-    return () => this._removeCallback(this._resultCallbacks, callback);
-  }
+  async _transcribe(audioBlob) {
+    if (audioBlob.size < 1000) {
+      // Too short, probably empty
+      this._emit('error', 'recording-too-short');
+      return;
+    }
 
-  onInterim(callback) {
-    this._interimCallbacks.push(callback);
-    return () => this._removeCallback(this._interimCallbacks, callback);
+    this._emit('transcribing');
+
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('lang', this.lang);
+
+      const response = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Transcription failed');
+      }
+
+      const result = await response.json();
+      const text = result.text?.trim();
+
+      if (text) {
+        this._emit('result', { transcript: text });
+      } else {
+        this._emit('error', 'no-speech');
+      }
+    } catch (error) {
+      console.error('[Voice] Transcription error:', error);
+      this._emit('error', error.message);
+    }
   }
 
   onStart(callback) {
@@ -167,9 +171,14 @@ class VoiceRecognition {
     return () => this._removeCallback(this._startCallbacks, callback);
   }
 
-  onEnd(callback) {
-    this._endCallbacks.push(callback);
-    return () => this._removeCallback(this._endCallbacks, callback);
+  onStop(callback) {
+    this._stopCallbacks.push(callback);
+    return () => this._removeCallback(this._stopCallbacks, callback);
+  }
+
+  onResult(callback) {
+    this._resultCallbacks.push(callback);
+    return () => this._removeCallback(this._resultCallbacks, callback);
   }
 
   onError(callback) {
@@ -177,13 +186,19 @@ class VoiceRecognition {
     return () => this._removeCallback(this._errorCallbacks, callback);
   }
 
+  onTranscribing(callback) {
+    this._transcribingCallbacks = this._transcribingCallbacks || [];
+    this._transcribingCallbacks.push(callback);
+    return () => this._removeCallback(this._transcribingCallbacks, callback);
+  }
+
   _emit(event, data) {
     const callbacks = {
       'start': this._startCallbacks,
-      'end': this._endCallbacks,
+      'stop': this._stopCallbacks,
       'result': this._resultCallbacks,
       'error': this._errorCallbacks,
-      'interim': this._interimCallbacks,
+      'transcribing': this._transcribingCallbacks || [],
     };
 
     if (callbacks[event]) {
@@ -198,17 +213,16 @@ class VoiceRecognition {
 
   static getAvailableLanguages() {
     return [
-      { code: 'fr-FR', label: 'Français' },
-      { code: 'en-US', label: 'English (US)' },
-      { code: 'en-GB', label: 'English (UK)' },
-      { code: 'de-DE', label: 'Deutsch' },
-      { code: 'es-ES', label: 'Español' },
-      { code: 'it-IT', label: 'Italiano' },
-      { code: 'pt-BR', label: 'Português (BR)' },
-      { code: 'ja-JP', label: '日本語' },
-      { code: 'zh-CN', label: '中文 (简体)' },
+      { code: 'french', label: 'Francais' },
+      { code: 'english', label: 'English' },
+      { code: 'german', label: 'Deutsch' },
+      { code: 'spanish', label: 'Espanol' },
+      { code: 'italian', label: 'Italiano' },
+      { code: 'portuguese', label: 'Portugues' },
+      { code: 'japanese', label: 'Japanese' },
+      { code: 'chinese', label: 'Chinese' },
     ];
   }
 }
 
-window.VoiceRecognition = VoiceRecognition;
+window.VoiceRecorder = VoiceRecorder;

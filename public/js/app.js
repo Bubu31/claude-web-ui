@@ -56,7 +56,7 @@ class App {
 
     // Voice controls
     this.voiceControlsContainer = document.getElementById('voice-controls');
-    this.voiceRecognition = null;
+    this.voiceRecorder = null;
 
     this._bindEvents();
     this._initVoiceControls();
@@ -146,36 +146,34 @@ class App {
   }
 
   _initVoiceControls() {
-    // Check if VoiceRecognition class is available
-    if (typeof VoiceRecognition === 'undefined') {
-      console.warn('VoiceRecognition class not loaded');
+    // Check if VoiceRecorder class is available
+    if (typeof VoiceRecorder === 'undefined') {
+      console.warn('VoiceRecorder class not loaded');
       this.voiceControlsContainer.innerHTML = '';
       return;
     }
 
-    // Initialize voice recognition
-    this.voiceRecognition = new VoiceRecognition({
-      lang: localStorage.getItem('voiceLang') || 'fr-FR',
-      continuous: false,
-      interimResults: false,
+    // Initialize voice recorder
+    this.voiceRecorder = new VoiceRecorder({
+      lang: localStorage.getItem('voiceLang') || 'french',
     });
 
-    if (!this.voiceRecognition.isSupported) {
+    if (!this.voiceRecorder.isSupported) {
       this.voiceControlsContainer.innerHTML = `
         <div class="voice-not-supported">
           <i class="fa-solid fa-microphone-slash"></i>
-          <span>Micro non supporté</span>
+          <span>Micro non supporte</span>
         </div>
       `;
       return;
     }
 
     // Create voice control UI
-    const languages = VoiceRecognition.getAvailableLanguages();
-    const currentLang = this.voiceRecognition.lang;
+    const languages = VoiceRecorder.getAvailableLanguages();
+    const currentLang = this.voiceRecorder.lang;
 
     this.voiceControlsContainer.innerHTML = `
-      <button id="voice-btn" class="btn-voice" title="Commande vocale (cliquez pour parler)">
+      <button id="voice-btn" class="btn-voice" title="Commande vocale (cliquez pour enregistrer, recliquez pour envoyer)">
         <i class="fa-solid fa-microphone"></i>
         <span class="voice-text">Parler</span>
       </button>
@@ -194,62 +192,68 @@ class App {
     // Bind language change
     this.voiceLangSelect.addEventListener('change', (e) => {
       const newLang = e.target.value;
-      this.voiceRecognition.setLanguage(newLang);
+      this.voiceRecorder.setLanguage(newLang);
       localStorage.setItem('voiceLang', newLang);
     });
 
-    // Voice recognition events
-    this.voiceRecognition.onStart(() => {
+    // Voice recorder events
+    this.voiceRecorder.onStart(() => {
       this.voiceBtn.classList.add('recording');
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Ecoute...';
+      this.voiceBtn.querySelector('i').className = 'fa-solid fa-stop';
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Stop';
     });
 
-    this.voiceRecognition.onEnd(() => {
+    this.voiceRecorder.onStop(() => {
+      this.voiceBtn.querySelector('i').className = 'fa-solid fa-spinner fa-spin';
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Transcription...';
+    });
+
+    this.voiceRecorder.onTranscribing(() => {
       this.voiceBtn.classList.remove('recording');
+      this.voiceBtn.classList.add('transcribing');
+      this.voiceBtn.querySelector('i').className = 'fa-solid fa-spinner fa-spin';
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Transcription...';
+    });
+
+    this.voiceRecorder.onResult(({ transcript }) => {
+      this.voiceBtn.classList.remove('transcribing');
+      this.voiceBtn.querySelector('i').className = 'fa-solid fa-microphone';
       this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
-    });
-
-    // Show interim results (what's being said in real-time)
-    this.voiceRecognition.onInterim(({ transcript }) => {
-      const shortText = transcript.length > 20 ? transcript.substring(0, 20) + '...' : transcript;
-      this.voiceBtn.querySelector('.voice-text').textContent = shortText || 'Ecoute...';
-    });
-
-    this.voiceRecognition.onResult(({ transcript, confidence }) => {
       this._sendVoiceInput(transcript);
     });
 
-    this.voiceRecognition.onError((error) => {
-      this.voiceBtn.classList.remove('recording');
+    this.voiceRecorder.onError((error) => {
+      this.voiceBtn.classList.remove('recording', 'transcribing');
+      this.voiceBtn.querySelector('i').className = 'fa-solid fa-microphone';
       this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
 
       if (error === 'not-allowed') {
-        this._showToast('Microphone non autorisé', 'error');
+        this._showToast('Microphone non autorise', 'error');
+      } else if (error === 'no-microphone') {
+        this._showToast('Aucun microphone detecte', 'error');
       } else if (error === 'no-speech') {
-        this._showToast('Aucune parole détectée', 'error');
-      } else if (error === 'audio-capture') {
-        this._showToast('Erreur de capture audio - vérifiez votre micro', 'error');
-      } else if (error === 'network') {
-        this._showToast('Erreur réseau - connexion requise', 'error');
+        this._showToast('Aucune parole detectee', 'error');
+      } else if (error === 'recording-too-short') {
+        this._showToast('Enregistrement trop court', 'error');
       } else if (error !== 'aborted') {
-        console.error('Voice recognition error:', error);
+        console.error('Voice recorder error:', error);
         this._showToast('Erreur: ' + error, 'error');
       }
     });
   }
 
   _toggleVoiceRecording() {
-    if (!this.voiceRecognition) return;
+    if (!this.voiceRecorder) return;
 
-    if (this.voiceRecognition.isListening) {
-      this.voiceRecognition.stop();
+    if (this.voiceRecorder.isRecording) {
+      this.voiceRecorder.stop();
     } else {
       // Check if we have an active instance
       if (!this.activeInstanceId) {
         this._showToast('Aucun terminal actif', 'error');
         return;
       }
-      this.voiceRecognition.start();
+      this.voiceRecorder.start();
     }
   }
 

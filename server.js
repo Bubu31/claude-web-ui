@@ -3,12 +3,13 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, statSync, readdirSync, readFileSync, mkdirSync } from 'fs';
+import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import multer from 'multer';
 import config from './src/config.js';
 import PtyManager from './src/pty-manager.js';
 import claudeUsage from './src/claude-usage.js';
+import { pipeline } from '@xenova/transformers';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -243,6 +244,88 @@ app.post('/api/upload-image', upload.single('image'), (req, res) => {
     return res.status(400).json({ error: 'No image file provided' });
   }
   res.json({ path: req.file.path });
+});
+
+// Configure audio upload for transcription
+const audioUploadDir = join(tmpdir(), 'claude-code-ui-audio');
+if (!existsSync(audioUploadDir)) {
+  mkdirSync(audioUploadDir, { recursive: true });
+}
+
+const audioStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, audioUploadDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, `audio-${uniqueSuffix}.webm`);
+  }
+});
+
+const audioUpload = multer({
+  storage: audioStorage,
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('audio/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files are allowed'));
+    }
+  }
+});
+
+// Whisper transcription pipeline (lazy loaded)
+let transcriber = null;
+
+async function getTranscriber() {
+  if (!transcriber) {
+    console.log('Loading Whisper model (first time may take a while)...');
+    transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
+      quantized: true,
+    });
+    console.log('Whisper model loaded!');
+  }
+  return transcriber;
+}
+
+// Transcribe audio endpoint
+app.post('/api/transcribe', audioUpload.single('audio'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No audio file provided' });
+  }
+
+  const audioPath = req.file.path;
+  const lang = req.body.lang || 'french';
+
+  try {
+    const whisper = await getTranscriber();
+
+    const result = await whisper(audioPath, {
+      language: lang,
+      task: 'transcribe',
+    });
+
+    // Clean up the audio file
+    try {
+      unlinkSync(audioPath);
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+
+    res.json({
+      text: result.text,
+      chunks: result.chunks || []
+    });
+  } catch (error) {
+    console.error('Transcription error:', error);
+
+    // Clean up on error
+    try {
+      unlinkSync(audioPath);
+    } catch (e) {}
+
+    res.status(500).json({ error: 'Transcription failed: ' + error.message });
+  }
 });
 
 // Set cookie
