@@ -1514,3 +1514,96 @@ body {
   text-align: center;
   padding: 2rem;
 }
+
+/* ======================= */
+/* VOICE INPUT             */
+/* ======================= */
+
+.voice-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: 1rem;
+  padding-right: 1rem;
+  border-right: 1px solid var(--border);
+}
+
+.btn-voice {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.btn-voice:hover {
+  color: var(--text);
+  background-color: var(--bg-hover);
+}
+
+.btn-voice.recording {
+  color: var(--danger);
+  border-color: var(--danger);
+  background-color: rgba(243, 139, 168, 0.1);
+  animation: voicePulse 1s ease-in-out infinite;
+}
+
+.btn-voice.recording i {
+  animation: voiceIconPulse 0.5s ease-in-out infinite;
+}
+
+.btn-voice:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-voice .voice-text {
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+@keyframes voicePulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(243, 139, 168, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(243, 139, 168, 0); }
+}
+
+@keyframes voiceIconPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.2); }
+}
+
+/* Voice language selector */
+.voice-lang-select {
+  padding: 0.3rem 0.5rem;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.75rem;
+  cursor: pointer;
+  max-width: 90px;
+}
+
+.voice-lang-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Voice not supported message */
+.voice-not-supported {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.voice-not-supported i {
+  color: var(--warning);
+}

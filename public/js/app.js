@@ -54,7 +54,12 @@ class App {
     this.layoutSplitBtn = document.getElementById('layout-split');
     this.layoutQuadBtn = document.getElementById('layout-quad');
 
+    // Voice controls
+    this.voiceControlsContainer = document.getElementById('voice-controls');
+    this.voiceRecognition = null;
+
     this._bindEvents();
+    this._initVoiceControls();
     this._bindImagePaste();
     this._bindImageDragDrop();
     this._initializeSlots();
@@ -138,6 +143,123 @@ class App {
         e.preventDefault();
       });
     });
+  }
+
+  _initVoiceControls() {
+    // Check if VoiceRecognition class is available
+    if (typeof VoiceRecognition === 'undefined') {
+      console.warn('VoiceRecognition class not loaded');
+      this.voiceControlsContainer.innerHTML = '';
+      return;
+    }
+
+    // Initialize voice recognition
+    this.voiceRecognition = new VoiceRecognition({
+      lang: localStorage.getItem('voiceLang') || 'fr-FR',
+      continuous: false,
+      interimResults: false,
+    });
+
+    if (!this.voiceRecognition.isSupported) {
+      this.voiceControlsContainer.innerHTML = `
+        <div class="voice-not-supported">
+          <i class="fa-solid fa-microphone-slash"></i>
+          <span>Micro non supporté</span>
+        </div>
+      `;
+      return;
+    }
+
+    // Create voice control UI
+    const languages = VoiceRecognition.getAvailableLanguages();
+    const currentLang = this.voiceRecognition.lang;
+
+    this.voiceControlsContainer.innerHTML = `
+      <button id="voice-btn" class="btn-voice" title="Commande vocale (cliquez pour parler)">
+        <i class="fa-solid fa-microphone"></i>
+        <span class="voice-text">Parler</span>
+      </button>
+      <select id="voice-lang" class="voice-lang-select" title="Langue de reconnaissance">
+        ${languages.map(l => `<option value="${l.code}" ${l.code === currentLang ? 'selected' : ''}>${l.label}</option>`).join('')}
+      </select>
+    `;
+
+    // Get elements
+    this.voiceBtn = document.getElementById('voice-btn');
+    this.voiceLangSelect = document.getElementById('voice-lang');
+
+    // Bind voice button click
+    this.voiceBtn.addEventListener('click', () => this._toggleVoiceRecording());
+
+    // Bind language change
+    this.voiceLangSelect.addEventListener('change', (e) => {
+      const newLang = e.target.value;
+      this.voiceRecognition.setLanguage(newLang);
+      localStorage.setItem('voiceLang', newLang);
+    });
+
+    // Voice recognition events
+    this.voiceRecognition.onStart(() => {
+      this.voiceBtn.classList.add('recording');
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Ecoute...';
+    });
+
+    this.voiceRecognition.onEnd(() => {
+      this.voiceBtn.classList.remove('recording');
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
+    });
+
+    this.voiceRecognition.onResult(({ transcript, confidence }) => {
+      this._sendVoiceInput(transcript);
+    });
+
+    this.voiceRecognition.onError((error) => {
+      this.voiceBtn.classList.remove('recording');
+      this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
+
+      if (error === 'not-allowed') {
+        this._showToast('Microphone non autorisé', 'error');
+      } else if (error === 'no-speech') {
+        this._showToast('Aucune parole détectée', 'error');
+      } else if (error !== 'aborted') {
+        console.error('Voice recognition error:', error);
+      }
+    });
+  }
+
+  _toggleVoiceRecording() {
+    if (!this.voiceRecognition) return;
+
+    if (this.voiceRecognition.isListening) {
+      this.voiceRecognition.stop();
+    } else {
+      // Check if we have an active instance
+      if (!this.activeInstanceId) {
+        this._showToast('Aucun terminal actif', 'error');
+        return;
+      }
+      this.voiceRecognition.start();
+    }
+  }
+
+  _sendVoiceInput(transcript) {
+    const activeInstance = this.instances.get(this.activeInstanceId);
+    if (!activeInstance || !activeInstance.ws) {
+      this._showToast('Aucun terminal actif', 'error');
+      return;
+    }
+
+    // Send the transcript to the terminal
+    activeInstance.ws.sendInput(transcript);
+
+    // Show feedback
+    const shortText = transcript.length > 50 ? transcript.substring(0, 50) + '...' : transcript;
+    this._showToast(`Envoyé: "${shortText}"`, 'success');
+
+    // Clear waiting state
+    activeInstance.waiting = false;
+    activeInstance.outputBuffer = '';
+    this._renderInstancesList();
   }
 
   _hasDraggedImage(e) {
