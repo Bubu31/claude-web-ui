@@ -3,3 +3,4 @@ cookie.json
 *.log
 .env
 .claude/
+tmpclaude-*
