@@ -37,6 +37,15 @@ class TerminalWrapper {
     this.fitAddon = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fitAddon);
 
+    // Web links addon for clickable URLs (Ctrl+Click to open)
+    this.webLinksAddon = new WebLinksAddon.WebLinksAddon((event, uri) => {
+      // Only open on Ctrl+Click
+      if (event.ctrlKey) {
+        window.open(uri, '_blank');
+      }
+    });
+    this.terminal.loadAddon(this.webLinksAddon);
+
     // Try WebGL addon for performance (disabled - can cause scroll issues)
     // try {
     //   this.webglAddon = new WebglAddon.WebglAddon();
@@ -175,6 +184,9 @@ class TerminalWrapper {
     }
     if (this.webglAddon) {
       this.webglAddon.dispose();
+    }
+    if (this.webLinksAddon) {
+      this.webLinksAddon.dispose();
     }
     this.terminal.dispose();
   }
