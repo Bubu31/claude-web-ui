@@ -11,6 +11,7 @@ class App {
     this.slots = [];                     // Array of slot objects
     this.activeSlotIndex = 0;            // Which slot has focus
     this.markdownPanels = new Map();     // Store markdown panels (like instances)
+    this.configPanels = new Map();       // Store config panels
     this.dragState = { tabId: null, sourceSlotIndex: null };  // Drag state
     // DOM elements
     this.instancesList = document.getElementById('instances-list');
@@ -876,12 +877,19 @@ class App {
 
   _createTabElement(slot, tabId) {
     const isMarkdown = tabId.startsWith('md-');
-    let name, status = '', title = '';
+    const isConfig = tabId.startsWith('cfg-');
+    let name, status = '', title = '', icon = 'solid fa-terminal';
 
     if (isMarkdown) {
       const panel = this.markdownPanels.get(tabId);
       name = panel ? panel.projectName : 'Markdown';
       title = panel ? panel.projectPath : '';
+      icon = 'brands fa-markdown';
+    } else if (isConfig) {
+      const panel = this.configPanels.get(tabId);
+      name = panel ? panel.projectName : 'Config';
+      title = panel ? panel.projectPath : '';
+      icon = 'solid fa-gear';
     } else {
       const instance = this.instances.get(tabId);
       if (!instance) return;
@@ -895,14 +903,15 @@ class App {
       }
     }
 
+    const isTerminal = !isMarkdown && !isConfig;
     const tab = document.createElement('div');
     tab.className = 'tab';
     tab.dataset.tabId = tabId;
     tab.draggable = true;
     tab.innerHTML = `
-      ${!isMarkdown ? `<span class="status-indicator ${status}"></span>` : ''}
+      ${isTerminal ? `<span class="status-indicator ${status}"></span>` : ''}
       <span class="tab-icon">
-        <i class="fa-${isMarkdown ? 'brands fa-markdown' : 'solid fa-terminal'}"></i>
+        <i class="fa-${icon}"></i>
       </span>
       <span class="tab-name" title="${title}">${name}</span>
       <button class="tab-close" title="Fermer">
@@ -943,7 +952,7 @@ class App {
 
     // Deactivate all tabs in this slot
     slot.tabBar.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    slot.content.querySelectorAll('.terminal-wrapper, .markdown-panel').forEach(w => {
+    slot.content.querySelectorAll('.terminal-wrapper, .markdown-panel, .config-panel').forEach(w => {
       w.classList.remove('visible');
     });
 
@@ -955,8 +964,14 @@ class App {
 
     // Show the content
     const isMarkdown = tabId.startsWith('md-');
+    const isConfig = tabId.startsWith('cfg-');
     if (isMarkdown) {
       const panel = this.markdownPanels.get(tabId);
+      if (panel && panel.wrapper) {
+        panel.wrapper.classList.add('visible');
+      }
+    } else if (isConfig) {
+      const panel = this.configPanels.get(tabId);
       if (panel && panel.wrapper) {
         panel.wrapper.classList.add('visible');
       }
@@ -1000,10 +1015,14 @@ class App {
     if (!slot) return;
 
     const isMarkdown = tabId.startsWith('md-');
+    const isConfig = tabId.startsWith('cfg-');
     let wrapper;
 
     if (isMarkdown) {
       const panel = this.markdownPanels.get(tabId);
+      wrapper = panel?.wrapper;
+    } else if (isConfig) {
+      const panel = this.configPanels.get(tabId);
       wrapper = panel?.wrapper;
     } else {
       const instance = this.instances.get(tabId);
@@ -1017,9 +1036,12 @@ class App {
 
   _closeTab(tabId) {
     const isMarkdown = tabId.startsWith('md-');
+    const isConfig = tabId.startsWith('cfg-');
 
     if (isMarkdown) {
       this._closeMarkdownTab(tabId);
+    } else if (isConfig) {
+      this._closeConfigTab(tabId);
     } else {
       // Use existing close instance logic
       this._closeInstance(tabId);
@@ -1315,9 +1337,17 @@ class App {
           li.classList.add('visible');
         }
 
+        const typeIcon = instance.type === 'shell'
+          ? '<i class="fa-solid fa-terminal instance-type-icon shell" title="Terminal"></i>'
+          : '<i class="fa-solid fa-robot instance-type-icon claude" title="Claude"></i>';
+
         li.innerHTML = `
           <span class="status-dot ${statusClass}"></span>
+          ${typeIcon}
           <span class="instance-name" title="${instance.cwd}">${folderName}</span>
+          <button class="config-btn" title="Configuration du projet">
+            <i class="fa-solid fa-gear"></i>
+          </button>
           <button class="md-btn" title="Voir les fichiers markdown">
             <i class="fa-brands fa-markdown"></i>
           </button>
@@ -1327,11 +1357,16 @@ class App {
         `;
 
         li.addEventListener('click', (e) => {
-          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn')) {
+          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn') && !e.target.closest('.config-btn')) {
             // Ctrl+click adds to split view, normal click replaces
             const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
             this._selectInstance(id, addToVisible);
           }
+        });
+
+        li.querySelector('.config-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._showConfigPanel(instance.cwd, folderName);
         });
 
         li.querySelector('.md-btn').addEventListener('click', (e) => {
@@ -1417,6 +1452,12 @@ class App {
       li.innerHTML = `
         <i class="fa-solid fa-folder"></i>
         <span>${project.name}</span>
+        <button class="shell-btn" title="Ouvrir un terminal">
+          <i class="fa-solid fa-terminal"></i>
+        </button>
+        <button class="config-btn" title="Configuration du projet">
+          <i class="fa-solid fa-gear"></i>
+        </button>
         <button class="md-btn" title="Voir les fichiers markdown">
           <i class="fa-brands fa-markdown"></i>
         </button>
@@ -1424,9 +1465,21 @@ class App {
 
       // Click on project name creates instance
       li.addEventListener('click', (e) => {
-        if (!e.target.closest('.md-btn')) {
+        if (!e.target.closest('.md-btn') && !e.target.closest('.config-btn') && !e.target.closest('.shell-btn')) {
           this._createInstance(project.path);
         }
+      });
+
+      // Click on shell button opens a standard terminal
+      li.querySelector('.shell-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._createShellInstance(project.path);
+      });
+
+      // Click on config button opens config panel
+      li.querySelector('.config-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showConfigPanel(project.path, project.name);
       });
 
       // Click on markdown button opens markdown modal
@@ -1491,6 +1544,35 @@ class App {
       this._showError(error.message);
     } finally {
       this.modalCreate.disabled = false;
+    }
+  }
+
+  async _createShellInstance(cwd) {
+    if (this.instances.size >= MAX_INSTANCES) {
+      this._showToast(`Maximum ${MAX_INSTANCES} instances`, 'error');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/shell-instances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cwd }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur de création');
+      }
+
+      await this._connectToInstance(data);
+      this._renderInstancesList();
+      this._selectInstance(data.id);
+      this._showToast('Terminal ouvert', 'success');
+
+    } catch (error) {
+      this._showToast(error.message, 'error');
     }
   }
 
@@ -1731,6 +1813,1235 @@ class App {
     } catch (error) {
       panel.content.innerHTML = `<p class="markdown-placeholder">Erreur: ${error.message}</p>`;
     }
+  }
+
+  // =============================================
+  // CONFIG PANEL METHODS
+  // =============================================
+
+  async _showConfigPanel(projectPath, projectName) {
+    // Generate tab ID
+    const tabId = 'cfg-' + projectPath.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
+
+    // If panel already exists, toggle it
+    if (this.configPanels.has(tabId)) {
+      const existingSlotIndex = this._getSlotIndexForTab(tabId);
+      if (existingSlotIndex !== -1) {
+        this._closeConfigTab(tabId);
+      } else {
+        this._addTabToSlot(this.activeSlotIndex, tabId, true);
+      }
+      return;
+    }
+
+    // Create config panel wrapper
+    const wrapper = document.createElement('div');
+    wrapper.className = 'config-panel';
+    wrapper.innerHTML = `
+      <div class="config-panel-header">
+        <div class="config-panel-title">
+          <i class="fa-solid fa-gear"></i>
+          <span class="config-panel-name">${projectName}</span>
+        </div>
+      </div>
+      <div class="config-tabs">
+        <button class="config-tab active" data-tab="claude-md">CLAUDE.md</button>
+        <button class="config-tab" data-tab="commands">Commands</button>
+        <button class="config-tab" data-tab="settings">Settings</button>
+        <button class="config-tab" data-tab="templates">Templates</button>
+      </div>
+      <div class="config-content">
+        <div class="config-tab-content active" data-content="claude-md">
+          <div class="config-editor-container">
+            <div class="config-editor-header">
+              <span class="config-editor-status">
+                <i class="fa-solid fa-spinner fa-spin"></i> Chargement...
+              </span>
+              <button class="template-browser-btn" data-target="claude-md">
+                <i class="fa-solid fa-download"></i> Importer template
+              </button>
+            </div>
+            <textarea class="config-textarea" placeholder="# Instructions projet&#10;&#10;Ajoutez vos instructions ici..."></textarea>
+            <div class="config-actions">
+              <button class="config-btn-save" data-action="save-claude-md">
+                <i class="fa-solid fa-save"></i> Sauvegarder
+              </button>
+            </div>
+            <div class="template-browser-container" data-browser="claude-md" style="display: none;">
+              <div class="template-browser-header">
+                <span class="template-browser-title">
+                  <i class="fa-solid fa-cloud-download"></i> Templates disponibles
+                </span>
+              </div>
+              <div class="template-categories">
+                <button class="template-category-btn active" data-category="rules">Rules</button>
+                <button class="template-category-btn" data-category="contexts">Contexts</button>
+              </div>
+              <div class="template-list">
+                <div class="template-loading"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="config-tab-content" data-content="commands">
+          <div class="commands-list-container">
+            <div class="commands-header">
+              <span class="commands-header-title">Commandes personnalisées</span>
+              <div style="display: flex; gap: 0.5rem;">
+                <button class="template-browser-btn" data-target="commands">
+                  <i class="fa-solid fa-download"></i> Importer
+                </button>
+                <button class="btn-add-command">
+                  <i class="fa-solid fa-plus"></i> Nouvelle
+                </button>
+              </div>
+            </div>
+            <div class="command-name-input-container" style="display: none;">
+              <input type="text" placeholder="Nom de la commande (ex: test-cmd)" />
+              <button class="btn-confirm"><i class="fa-solid fa-check"></i></button>
+              <button class="btn-cancel-input"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="commands-list">
+              <div class="commands-empty">
+                <i class="fa-solid fa-spinner fa-spin"></i> Chargement...
+              </div>
+            </div>
+            <div class="command-editor" style="display: none;">
+              <div class="command-editor-header">
+                <span class="command-editor-title">Édition: <strong></strong></span>
+              </div>
+              <textarea class="config-textarea command-content" placeholder="Contenu de la commande..."></textarea>
+              <div class="config-actions">
+                <button class="config-btn-save" data-action="save-command">
+                  <i class="fa-solid fa-save"></i> Sauvegarder
+                </button>
+              </div>
+            </div>
+            <div class="template-browser-container" data-browser="commands" style="display: none;">
+              <div class="template-browser-header">
+                <span class="template-browser-title">
+                  <i class="fa-solid fa-cloud-download"></i> Templates de commandes
+                </span>
+              </div>
+              <div class="template-list">
+                <div class="template-loading"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="config-tab-content" data-content="settings">
+          <div class="settings-container">
+            <div class="settings-group">
+              <div class="settings-group-title">Modèle</div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  Modèle Claude
+                  <small>Modèle utilisé pour ce projet</small>
+                </label>
+                <select class="settings-select" data-setting="model">
+                  <option value="">Par défaut</option>
+                  <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+                  <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-group-title">Permissions</div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  Bash
+                  <small>Autoriser l'exécution de commandes</small>
+                </label>
+                <label class="toggle-switch">
+                  <input type="checkbox" data-permission="Bash" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  Edit
+                  <small>Autoriser l'édition de fichiers</small>
+                </label>
+                <label class="toggle-switch">
+                  <input type="checkbox" data-permission="Edit" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  Write
+                  <small>Autoriser la création de fichiers</small>
+                </label>
+                <label class="toggle-switch">
+                  <input type="checkbox" data-permission="Write" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">
+                  WebFetch
+                  <small>Autoriser les requêtes HTTP</small>
+                </label>
+                <label class="toggle-switch">
+                  <input type="checkbox" data-permission="WebFetch" checked>
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="config-actions">
+              <button class="config-btn-save" data-action="save-settings">
+                <i class="fa-solid fa-save"></i> Sauvegarder
+              </button>
+            </div>
+            <div class="template-browser-container" data-browser="settings" style="display: none;">
+              <div class="template-browser-header">
+                <span class="template-browser-title">
+                  <i class="fa-solid fa-cloud-download"></i> Templates de configuration
+                </span>
+              </div>
+              <div class="template-categories">
+                <button class="template-category-btn active" data-category="hooks">Hooks</button>
+                <button class="template-category-btn" data-category="mcp-configs">MCP Configs</button>
+              </div>
+              <div class="template-list">
+                <div class="template-loading"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</div>
+              </div>
+            </div>
+            <button class="template-browser-btn" data-target="settings" style="margin-top: 1rem;">
+              <i class="fa-solid fa-download"></i> Parcourir les templates
+            </button>
+          </div>
+        </div>
+        <div class="config-tab-content" data-content="templates">
+          <div class="templates-manager">
+            <div class="templates-header">
+              <div class="templates-header-info">
+                <span class="templates-repo-status">
+                  <i class="fa-solid fa-spinner fa-spin"></i> Vérification...
+                </span>
+              </div>
+              <button class="btn-sync-templates">
+                <i class="fa-solid fa-sync"></i> Synchroniser
+              </button>
+            </div>
+            <div class="templates-categories-grid">
+              <!-- Categories will be loaded here -->
+            </div>
+            <div class="templates-browser" style="display: none;">
+              <div class="templates-browser-header">
+                <button class="btn-back-categories">
+                  <i class="fa-solid fa-arrow-left"></i> Retour
+                </button>
+                <span class="templates-browser-title">Catégorie</span>
+              </div>
+              <div class="templates-files-list">
+                <!-- Files will be loaded here -->
+              </div>
+            </div>
+            <div class="template-preview-panel" style="display: none;">
+              <div class="template-preview-panel-header">
+                <span class="template-preview-panel-title">Aperçu</span>
+                <button class="btn-close-preview">
+                  <i class="fa-solid fa-xmark"></i>
+                </button>
+              </div>
+              <pre class="template-preview-panel-content"></pre>
+              <div class="template-preview-panel-actions">
+                <button class="btn-import-template">
+                  <i class="fa-solid fa-download"></i> Importer dans ce projet
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const panel = {
+      id: tabId,
+      projectPath,
+      projectName,
+      wrapper,
+      activeTab: 'claude-md',
+      selectedCommand: null,
+      commands: [],
+      claudeMdExists: false,
+      settingsExists: false,
+      settings: {}
+    };
+
+    this.configPanels.set(tabId, panel);
+
+    // Bind tab switching
+    wrapper.querySelectorAll('.config-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this._switchConfigTab(tabId, tab.dataset.tab);
+      });
+    });
+
+    // Bind CLAUDE.md save
+    wrapper.querySelector('[data-action="save-claude-md"]').addEventListener('click', () => {
+      this._saveClaudeMd(tabId);
+    });
+
+    // Bind Commands functionality
+    wrapper.querySelector('.btn-add-command').addEventListener('click', () => {
+      this._showNewCommandInput(tabId);
+    });
+
+    const inputContainer = wrapper.querySelector('.command-name-input-container');
+    inputContainer.querySelector('.btn-confirm').addEventListener('click', () => {
+      this._createNewCommand(tabId);
+    });
+    inputContainer.querySelector('.btn-cancel-input').addEventListener('click', () => {
+      inputContainer.style.display = 'none';
+    });
+    inputContainer.querySelector('input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') this._createNewCommand(tabId);
+      if (e.key === 'Escape') inputContainer.style.display = 'none';
+    });
+
+    // Bind command save
+    wrapper.querySelector('[data-action="save-command"]').addEventListener('click', () => {
+      this._saveCommand(tabId);
+    });
+
+    // Bind settings save
+    wrapper.querySelector('[data-action="save-settings"]').addEventListener('click', () => {
+      this._saveSettings(tabId);
+    });
+
+    // Bind template browser buttons
+    wrapper.querySelectorAll('.template-browser-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._toggleTemplateBrowser(tabId, btn.dataset.target);
+      });
+    });
+
+    // Bind templates tab functionality
+    wrapper.querySelector('.btn-sync-templates').addEventListener('click', () => {
+      this._syncTemplates(tabId);
+    });
+    wrapper.querySelector('.btn-back-categories').addEventListener('click', () => {
+      this._showTemplatesCategories(tabId);
+    });
+    wrapper.querySelector('.btn-close-preview').addEventListener('click', () => {
+      wrapper.querySelector('.template-preview-panel').style.display = 'none';
+    });
+    wrapper.querySelector('.btn-import-template').addEventListener('click', () => {
+      this._importSelectedTemplate(tabId);
+    });
+
+    // Bind template category buttons
+    wrapper.querySelectorAll('.template-category-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const browserContainer = e.target.closest('.template-browser-container');
+        browserContainer.querySelectorAll('.template-category-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this._loadTemplates(tabId, btn.dataset.category, browserContainer);
+      });
+    });
+
+    // Add to slot
+    this._addTabToSlot(this.activeSlotIndex, tabId, true);
+
+    // Load initial data
+    await this._loadClaudeMd(tabId);
+    await this._loadCommands(tabId);
+    await this._loadSettings(tabId);
+  }
+
+  _switchConfigTab(tabId, tabName) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    panel.activeTab = tabName;
+
+    // Update tab buttons
+    panel.wrapper.querySelectorAll('.config-tab').forEach(tab => {
+      tab.classList.toggle('active', tab.dataset.tab === tabName);
+    });
+
+    // Update tab content
+    panel.wrapper.querySelectorAll('.config-tab-content').forEach(content => {
+      content.classList.toggle('active', content.dataset.content === tabName);
+    });
+
+    // Load data for templates tab
+    if (tabName === 'templates') {
+      this._loadTemplatesTab(tabId);
+    }
+  }
+
+  _closeConfigTab(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    this._removeTabFromAllSlots(tabId);
+    panel.wrapper.remove();
+    this.configPanels.delete(tabId);
+
+    this._updateEmptyState();
+  }
+
+  // CLAUDE.md Tab Methods
+  async _loadClaudeMd(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const statusEl = panel.wrapper.querySelector('.config-editor-status');
+    const textarea = panel.wrapper.querySelector('[data-content="claude-md"] .config-textarea');
+
+    try {
+      const response = await fetch(`/api/config/claude-md?cwd=${encodeURIComponent(panel.projectPath)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      panel.claudeMdExists = data.exists;
+      textarea.value = data.content || '';
+
+      if (data.exists) {
+        statusEl.className = 'config-editor-status exists';
+        statusEl.innerHTML = '<i class="fa-solid fa-check-circle"></i> Fichier existant';
+      } else {
+        statusEl.className = 'config-editor-status not-exists';
+        statusEl.innerHTML = '<i class="fa-solid fa-exclamation-circle"></i> Fichier non trouvé (sera créé)';
+      }
+    } catch (error) {
+      statusEl.className = 'config-editor-status';
+      statusEl.innerHTML = `<i class="fa-solid fa-exclamation-triangle"></i> Erreur: ${error.message}`;
+    }
+  }
+
+  async _saveClaudeMd(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const textarea = panel.wrapper.querySelector('[data-content="claude-md"] .config-textarea');
+    const saveBtn = panel.wrapper.querySelector('[data-action="save-claude-md"]');
+
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sauvegarde...';
+
+    try {
+      const response = await fetch('/api/config/claude-md', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: panel.projectPath,
+          content: textarea.value
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      panel.claudeMdExists = true;
+      const statusEl = panel.wrapper.querySelector('.config-editor-status');
+      statusEl.className = 'config-editor-status exists';
+      statusEl.innerHTML = '<i class="fa-solid fa-check-circle"></i> Fichier existant';
+
+      this._showToast('CLAUDE.md sauvegardé', 'success');
+    } catch (error) {
+      this._showToast('Erreur: ' + error.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '<i class="fa-solid fa-save"></i> Sauvegarder';
+    }
+  }
+
+  // Commands Tab Methods
+  async _loadCommands(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const listEl = panel.wrapper.querySelector('.commands-list');
+
+    try {
+      const response = await fetch(`/api/config/commands?cwd=${encodeURIComponent(panel.projectPath)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      panel.commands = data.commands || [];
+      this._renderCommandsList(tabId);
+    } catch (error) {
+      listEl.innerHTML = `<div class="commands-empty">Erreur: ${error.message}</div>`;
+    }
+  }
+
+  _renderCommandsList(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const listEl = panel.wrapper.querySelector('.commands-list');
+
+    if (panel.commands.length === 0) {
+      listEl.innerHTML = '<div class="commands-empty">Aucune commande personnalisée</div>';
+      return;
+    }
+
+    listEl.innerHTML = panel.commands.map(cmd => `
+      <div class="command-item ${panel.selectedCommand === cmd.name ? 'active' : ''}" data-name="${cmd.name}">
+        <i class="fa-solid fa-terminal"></i>
+        <span class="command-name">${cmd.name}</span>
+        <button class="command-delete" title="Supprimer">
+          <i class="fa-solid fa-trash"></i>
+        </button>
+      </div>
+    `).join('');
+
+    // Bind click events
+    listEl.querySelectorAll('.command-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        if (!e.target.closest('.command-delete')) {
+          this._selectCommand(tabId, item.dataset.name);
+        }
+      });
+
+      item.querySelector('.command-delete').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._deleteCommand(tabId, item.dataset.name);
+      });
+    });
+  }
+
+  _selectCommand(tabId, commandName) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    panel.selectedCommand = commandName;
+    this._renderCommandsList(tabId);
+
+    const command = panel.commands.find(c => c.name === commandName);
+    const editorEl = panel.wrapper.querySelector('.command-editor');
+    const titleEl = editorEl.querySelector('.command-editor-title strong');
+    const textarea = editorEl.querySelector('.command-content');
+
+    titleEl.textContent = commandName;
+    textarea.value = command ? command.content : '';
+    editorEl.style.display = 'flex';
+  }
+
+  _showNewCommandInput(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const inputContainer = panel.wrapper.querySelector('.command-name-input-container');
+    const input = inputContainer.querySelector('input');
+
+    inputContainer.style.display = 'flex';
+    input.value = '';
+    input.focus();
+  }
+
+  async _createNewCommand(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const inputContainer = panel.wrapper.querySelector('.command-name-input-container');
+    const input = inputContainer.querySelector('input');
+    const name = input.value.trim();
+
+    if (!name) {
+      this._showToast('Nom de commande requis', 'error');
+      return;
+    }
+
+    // Validate name (alphanumeric and hyphens only)
+    if (!/^[a-zA-Z0-9-]+$/.test(name)) {
+      this._showToast('Nom invalide (lettres, chiffres, tirets)', 'error');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/config/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: panel.projectPath,
+          name,
+          content: '# ' + name + '\n\nDescription de la commande...'
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      inputContainer.style.display = 'none';
+      await this._loadCommands(tabId);
+      this._selectCommand(tabId, name);
+      this._showToast('Commande créée', 'success');
+    } catch (error) {
+      this._showToast('Erreur: ' + error.message, 'error');
+    }
+  }
+
+  async _saveCommand(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel || !panel.selectedCommand) return;
+
+    const textarea = panel.wrapper.querySelector('.command-content');
+    const saveBtn = panel.wrapper.querySelector('[data-action="save-command"]');
+
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sauvegarde...';
+
+    try {
+      const response = await fetch('/api/config/commands', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: panel.projectPath,
+          name: panel.selectedCommand,
+          content: textarea.value
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      // Update local cache
+      const cmd = panel.commands.find(c => c.name === panel.selectedCommand);
+      if (cmd) cmd.content = textarea.value;
+
+      this._showToast('Commande sauvegardée', 'success');
+    } catch (error) {
+      this._showToast('Erreur: ' + error.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '<i class="fa-solid fa-save"></i> Sauvegarder';
+    }
+  }
+
+  async _deleteCommand(tabId, commandName) {
+    if (!confirm(`Supprimer la commande "${commandName}" ?`)) return;
+
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    try {
+      const response = await fetch(`/api/config/commands?cwd=${encodeURIComponent(panel.projectPath)}&name=${encodeURIComponent(commandName)}`, {
+        method: 'DELETE'
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      // Reset selection if deleted command was selected
+      if (panel.selectedCommand === commandName) {
+        panel.selectedCommand = null;
+        panel.wrapper.querySelector('.command-editor').style.display = 'none';
+      }
+
+      await this._loadCommands(tabId);
+      this._showToast('Commande supprimée', 'success');
+    } catch (error) {
+      this._showToast('Erreur: ' + error.message, 'error');
+    }
+  }
+
+  // Settings Tab Methods
+  async _loadSettings(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    try {
+      const response = await fetch(`/api/config/settings?cwd=${encodeURIComponent(panel.projectPath)}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      panel.settingsExists = data.exists;
+      panel.settings = data.settings || {};
+
+      // Update UI
+      const modelSelect = panel.wrapper.querySelector('[data-setting="model"]');
+      modelSelect.value = panel.settings.model || '';
+
+      // Update permissions
+      const permissions = panel.settings.permissions || {};
+      panel.wrapper.querySelectorAll('[data-permission]').forEach(checkbox => {
+        const perm = checkbox.dataset.permission;
+        // Default to true if not specified
+        checkbox.checked = permissions[perm] !== false;
+      });
+    } catch (error) {
+      this._showToast('Erreur chargement settings: ' + error.message, 'error');
+    }
+  }
+
+  async _saveSettings(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const saveBtn = panel.wrapper.querySelector('[data-action="save-settings"]');
+
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sauvegarde...';
+
+    try {
+      const modelSelect = panel.wrapper.querySelector('[data-setting="model"]');
+      const permissions = {};
+
+      panel.wrapper.querySelectorAll('[data-permission]').forEach(checkbox => {
+        permissions[checkbox.dataset.permission] = checkbox.checked;
+      });
+
+      const settings = {
+        model: modelSelect.value || undefined,
+        permissions
+      };
+
+      // Remove undefined values
+      Object.keys(settings).forEach(key => {
+        if (settings[key] === undefined) delete settings[key];
+      });
+
+      const response = await fetch('/api/config/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cwd: panel.projectPath,
+          settings
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      panel.settings = settings;
+      panel.settingsExists = true;
+      this._showToast('Settings sauvegardés', 'success');
+    } catch (error) {
+      this._showToast('Erreur: ' + error.message, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = '<i class="fa-solid fa-save"></i> Sauvegarder';
+    }
+  }
+
+  // =============================================
+  // TEMPLATE BROWSER METHODS
+  // =============================================
+
+  _toggleTemplateBrowser(tabId, target) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const browserContainer = panel.wrapper.querySelector(`[data-browser="${target}"]`);
+    if (!browserContainer) return;
+
+    const isVisible = browserContainer.style.display !== 'none';
+
+    if (isVisible) {
+      browserContainer.style.display = 'none';
+    } else {
+      browserContainer.style.display = 'block';
+
+      // Load templates for the active category
+      const activeCategory = browserContainer.querySelector('.template-category-btn.active');
+      const category = activeCategory ? activeCategory.dataset.category : (target === 'commands' ? 'commands' : 'rules');
+      this._loadTemplates(tabId, category, browserContainer);
+    }
+  }
+
+  async _loadTemplates(tabId, category, browserContainer) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const listEl = browserContainer.querySelector('.template-list');
+    listEl.innerHTML = '<div class="template-loading"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</div>';
+
+    try {
+      const response = await fetch(`/api/templates/${category}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      if (!data.templates || data.templates.length === 0) {
+        listEl.innerHTML = '<div class="template-empty">Aucun template disponible</div>';
+        return;
+      }
+
+      listEl.innerHTML = data.templates.map(tpl => `
+        <div class="template-item" data-file="${tpl.name}" data-category="${category}">
+          <div class="template-item-info">
+            <i class="fa-solid fa-file-code"></i>
+            <span class="template-item-name">${tpl.name}</span>
+          </div>
+          <div class="template-item-actions">
+            <button class="template-action-btn preview-btn" title="Prévisualiser">
+              <i class="fa-solid fa-eye"></i>
+            </button>
+            <button class="template-action-btn import-btn" title="Importer">
+              <i class="fa-solid fa-download"></i>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      // Bind click events
+      listEl.querySelectorAll('.template-item').forEach(item => {
+        const file = item.dataset.file;
+        const cat = item.dataset.category;
+
+        item.querySelector('.preview-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._previewTemplate(tabId, cat, file);
+        });
+
+        item.querySelector('.import-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._importTemplate(tabId, cat, file);
+        });
+      });
+    } catch (error) {
+      listEl.innerHTML = `<div class="template-empty">Erreur: ${error.message}</div>`;
+    }
+  }
+
+  async _previewTemplate(tabId, category, file) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    // Create preview modal if it doesn't exist
+    let overlay = document.querySelector('.template-preview-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'template-preview-overlay hidden';
+      overlay.innerHTML = `
+        <div class="template-preview-modal">
+          <div class="template-preview-header">
+            <span class="template-preview-title">
+              <i class="fa-solid fa-file-code"></i>
+              <span class="preview-filename"></span>
+            </span>
+            <button class="template-preview-close">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+          <div class="template-preview-content">
+            <pre></pre>
+          </div>
+          <div class="template-preview-footer">
+            <button class="btn-cancel">Fermer</button>
+            <button class="btn-import">
+              <i class="fa-solid fa-download"></i> Importer
+            </button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+
+      // Bind close events
+      overlay.querySelector('.template-preview-close').addEventListener('click', () => {
+        overlay.classList.add('hidden');
+      });
+      overlay.querySelector('.btn-cancel').addEventListener('click', () => {
+        overlay.classList.add('hidden');
+      });
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          overlay.classList.add('hidden');
+        }
+      });
+    }
+
+    // Show loading
+    overlay.classList.remove('hidden');
+    overlay.querySelector('.preview-filename').textContent = file;
+    overlay.querySelector('.template-preview-content pre').textContent = 'Chargement...';
+
+    try {
+      const response = await fetch(`/api/templates/${category}/${file}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      overlay.querySelector('.template-preview-content pre').textContent = data.content;
+
+      // Update import button
+      const importBtn = overlay.querySelector('.btn-import');
+      importBtn.onclick = () => {
+        overlay.classList.add('hidden');
+        this._importTemplate(tabId, category, file, data.content);
+      };
+    } catch (error) {
+      overlay.querySelector('.template-preview-content pre').textContent = 'Erreur: ' + error.message;
+    }
+  }
+
+  async _importTemplate(tabId, category, file, content = null) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    // Fetch content if not provided
+    if (content === null) {
+      try {
+        const response = await fetch(`/api/templates/${category}/${file}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Erreur');
+        }
+        content = data.content;
+      } catch (error) {
+        this._showToast('Erreur: ' + error.message, 'error');
+        return;
+      }
+    }
+
+    // Determine where to import based on category
+    if (category === 'commands') {
+      // Import as a new command
+      const name = file.replace(/\.md$/, '');
+      try {
+        const response = await fetch('/api/config/commands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cwd: panel.projectPath,
+            name,
+            content
+          })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          // If command exists, update it
+          if (response.status === 409) {
+            if (confirm(`La commande "${name}" existe déjà. Voulez-vous la remplacer ?`)) {
+              const updateResponse = await fetch('/api/config/commands', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  cwd: panel.projectPath,
+                  name,
+                  content
+                })
+              });
+
+              if (!updateResponse.ok) {
+                const updateData = await updateResponse.json();
+                throw new Error(updateData.error || 'Erreur');
+              }
+            } else {
+              return;
+            }
+          } else {
+            throw new Error(data.error || 'Erreur');
+          }
+        }
+
+        await this._loadCommands(tabId);
+        this._selectCommand(tabId, name);
+        this._showToast(`Commande "${name}" importée`, 'success');
+      } catch (error) {
+        this._showToast('Erreur: ' + error.message, 'error');
+      }
+    } else if (category === 'rules' || category === 'contexts') {
+      // Append to CLAUDE.md
+      const textarea = panel.wrapper.querySelector('[data-content="claude-md"] .config-textarea');
+      const currentContent = textarea.value;
+
+      // Add a separator and the new content
+      const separator = currentContent.trim() ? '\n\n---\n\n' : '';
+      textarea.value = currentContent + separator + `# ${file}\n\n${content}`;
+
+      this._switchConfigTab(tabId, 'claude-md');
+      this._showToast(`Template "${file}" ajouté à CLAUDE.md`, 'success');
+    } else if (category === 'hooks' || category === 'mcp-configs') {
+      // For hooks and MCP configs, show a toast with instructions
+      this._showToast(`Template "${file}" - Copiez le contenu dans votre configuration`, 'success');
+
+      // Open preview so user can see the content
+      this._previewTemplate(tabId, category, file);
+    }
+  }
+
+  // =============================================
+  // TEMPLATES MANAGER METHODS
+  // =============================================
+
+  async _loadTemplatesTab(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const statusEl = panel.wrapper.querySelector('.templates-repo-status');
+    const categoriesGrid = panel.wrapper.querySelector('.templates-categories-grid');
+
+    statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Vérification...';
+
+    try {
+      const response = await fetch('/api/templates');
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      // Update status
+      if (data.repoStatus?.exists) {
+        const syncDate = data.repoStatus.lastSync
+          ? new Date(data.repoStatus.lastSync).toLocaleDateString('fr-FR')
+          : 'Inconnu';
+        statusEl.innerHTML = `<i class="fa-solid fa-check-circle" style="color: var(--accent-active);"></i> Repo local OK - Dernière mise à jour: ${syncDate}`;
+      } else {
+        statusEl.innerHTML = '<i class="fa-solid fa-exclamation-triangle" style="color: var(--danger);"></i> Repo non trouvé - Cliquez sur Synchroniser';
+      }
+
+      // Render categories
+      if (data.categories && data.categories.length > 0) {
+        categoriesGrid.innerHTML = data.categories.map(cat => `
+          <div class="template-category-card" data-category="${cat.id}">
+            <div class="template-category-icon">
+              <i class="fa-solid ${this._getCategoryIcon(cat.id)}"></i>
+            </div>
+            <div class="template-category-info">
+              <span class="template-category-name">${cat.name}</span>
+              <span class="template-category-count">${cat.count} fichier${cat.count > 1 ? 's' : ''}</span>
+            </div>
+          </div>
+        `).join('');
+
+        // Bind click handlers
+        categoriesGrid.querySelectorAll('.template-category-card').forEach(card => {
+          card.addEventListener('click', () => {
+            this._browseTemplateCategory(tabId, card.dataset.category);
+          });
+        });
+      } else {
+        categoriesGrid.innerHTML = '<div class="templates-empty">Aucune catégorie disponible. Cliquez sur Synchroniser.</div>';
+      }
+    } catch (error) {
+      statusEl.innerHTML = `<i class="fa-solid fa-exclamation-triangle" style="color: var(--danger);"></i> Erreur: ${error.message}`;
+      categoriesGrid.innerHTML = '';
+    }
+  }
+
+  _getCategoryIcon(category) {
+    const icons = {
+      'commands': 'fa-terminal',
+      'rules': 'fa-book',
+      'contexts': 'fa-file-lines',
+      'hooks': 'fa-code-branch',
+      'mcp-configs': 'fa-server',
+      'skills': 'fa-wand-magic-sparkles',
+      'agents': 'fa-robot',
+      'plugins': 'fa-plug',
+      'examples': 'fa-lightbulb'
+    };
+    return icons[category] || 'fa-folder';
+  }
+
+  async _syncTemplates(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const syncBtn = panel.wrapper.querySelector('.btn-sync-templates');
+    const statusEl = panel.wrapper.querySelector('.templates-repo-status');
+
+    syncBtn.disabled = true;
+    syncBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Synchronisation...';
+    statusEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Synchronisation en cours...';
+
+    try {
+      const response = await fetch('/api/templates/sync', { method: 'POST' });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      this._showToast(`Templates ${data.action === 'cloned' ? 'clonés' : 'mis à jour'}: ${data.message || 'OK'}`, 'success');
+
+      // Reload the templates list
+      await this._loadTemplatesTab(tabId);
+    } catch (error) {
+      this._showToast('Erreur sync: ' + error.message, 'error');
+      statusEl.innerHTML = `<i class="fa-solid fa-exclamation-triangle" style="color: var(--danger);"></i> Erreur: ${error.message}`;
+    } finally {
+      syncBtn.disabled = false;
+      syncBtn.innerHTML = '<i class="fa-solid fa-sync"></i> Synchroniser';
+    }
+  }
+
+  async _browseTemplateCategory(tabId, category) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const categoriesGrid = panel.wrapper.querySelector('.templates-categories-grid');
+    const browser = panel.wrapper.querySelector('.templates-browser');
+    const titleEl = browser.querySelector('.templates-browser-title');
+    const filesList = browser.querySelector('.templates-files-list');
+
+    // Store current category for import
+    panel.currentTemplateCategory = category;
+
+    categoriesGrid.style.display = 'none';
+    browser.style.display = 'block';
+    titleEl.textContent = category.charAt(0).toUpperCase() + category.slice(1).replace(/-/g, ' ');
+
+    filesList.innerHTML = '<div class="templates-loading"><i class="fa-solid fa-spinner fa-spin"></i> Chargement...</div>';
+
+    try {
+      const response = await fetch(`/api/templates/${category}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      if (!data.templates || data.templates.length === 0) {
+        filesList.innerHTML = '<div class="templates-empty">Aucun fichier dans cette catégorie</div>';
+        return;
+      }
+
+      filesList.innerHTML = data.templates.map(tpl => `
+        <div class="template-file-item" data-path="${tpl.path}" data-name="${tpl.name}">
+          <div class="template-file-info">
+            <i class="fa-solid fa-file-code"></i>
+            <span class="template-file-name">${tpl.name}</span>
+          </div>
+          <div class="template-file-actions">
+            <button class="btn-preview-file" title="Prévisualiser">
+              <i class="fa-solid fa-eye"></i>
+            </button>
+            <button class="btn-import-file" title="Importer">
+              <i class="fa-solid fa-download"></i>
+            </button>
+          </div>
+        </div>
+      `).join('');
+
+      // Bind click handlers
+      filesList.querySelectorAll('.template-file-item').forEach(item => {
+        item.querySelector('.btn-preview-file').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._previewTemplateFile(tabId, category, item.dataset.path);
+        });
+        item.querySelector('.btn-import-file').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._importTemplateFile(tabId, category, item.dataset.path);
+        });
+      });
+    } catch (error) {
+      filesList.innerHTML = `<div class="templates-empty">Erreur: ${error.message}</div>`;
+    }
+  }
+
+  _showTemplatesCategories(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const categoriesGrid = panel.wrapper.querySelector('.templates-categories-grid');
+    const browser = panel.wrapper.querySelector('.templates-browser');
+    const previewPanel = panel.wrapper.querySelector('.template-preview-panel');
+
+    categoriesGrid.style.display = 'grid';
+    browser.style.display = 'none';
+    previewPanel.style.display = 'none';
+  }
+
+  async _previewTemplateFile(tabId, category, filePath) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    const previewPanel = panel.wrapper.querySelector('.template-preview-panel');
+    const titleEl = previewPanel.querySelector('.template-preview-panel-title');
+    const contentEl = previewPanel.querySelector('.template-preview-panel-content');
+
+    panel.currentTemplatePath = filePath;
+    panel.currentTemplateCategory = category;
+
+    const fileName = filePath.split('/').pop();
+    titleEl.textContent = fileName;
+    contentEl.textContent = 'Chargement...';
+    previewPanel.style.display = 'flex';
+
+    try {
+      const response = await fetch(`/api/templates/${category}/${filePath}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      contentEl.textContent = data.content;
+      panel.currentTemplateContent = data.content;
+    } catch (error) {
+      contentEl.textContent = 'Erreur: ' + error.message;
+    }
+  }
+
+  async _importTemplateFile(tabId, category, filePath) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel) return;
+
+    try {
+      const response = await fetch('/api/templates/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category,
+          templatePath: filePath,
+          targetProject: panel.projectPath
+        })
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Erreur');
+      }
+
+      const fileName = filePath.split('/').pop();
+      const message = data.overwritten
+        ? `"${fileName}" mis à jour dans ${data.destination}`
+        : `"${fileName}" importé dans ${data.destination}`;
+
+      this._showToast(message, 'success');
+    } catch (error) {
+      this._showToast('Erreur import: ' + error.message, 'error');
+    }
+  }
+
+  _importSelectedTemplate(tabId) {
+    const panel = this.configPanels.get(tabId);
+    if (!panel || !panel.currentTemplatePath || !panel.currentTemplateCategory) {
+      this._showToast('Aucun template sélectionné', 'error');
+      return;
+    }
+
+    this._importTemplateFile(tabId, panel.currentTemplateCategory, panel.currentTemplatePath);
   }
 
   async _restartServer() {

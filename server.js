@@ -3,9 +3,9 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync } from 'fs';
+import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
-import { execFileSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import multer from 'multer';
 import ffmpegPath from 'ffmpeg-static';
 import WaveFile from 'wavefile';
@@ -73,6 +73,7 @@ app.get('/api/instances/:id', (req, res) => {
   res.json({
     id: instance.id,
     cwd: instance.cwd,
+    type: instance.type || 'claude',
     status: instance.status,
     createdAt: instance.createdAt,
   });
@@ -98,6 +99,35 @@ app.post('/api/instances', (req, res) => {
 
   try {
     const instance = ptyManager.create(cwd);
+    res.status(201).json(instance);
+  } catch (error) {
+    if (error.message.includes('Maximum instances')) {
+      return res.status(429).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create new shell instance (standard terminal)
+app.post('/api/shell-instances', (req, res) => {
+  const { cwd } = req.body;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd is required' });
+  }
+
+  // Validate path
+  if (!existsSync(cwd)) {
+    return res.status(400).json({ error: 'Directory does not exist' });
+  }
+
+  const stats = statSync(cwd);
+  if (!stats.isDirectory()) {
+    return res.status(400).json({ error: 'Path is not a directory' });
+  }
+
+  try {
+    const instance = ptyManager.createShell(cwd);
     res.status(201).json(instance);
   } catch (error) {
     if (error.message.includes('Maximum instances')) {
@@ -221,6 +251,485 @@ app.get('/api/projects/markdown/content', (req, res) => {
   try {
     const content = readFileSync(filePath, 'utf-8');
     res.json({ content, name: file });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// CONFIG API - CLAUDE.md
+// =============================================
+
+// Get CLAUDE.md content
+app.get('/api/config/claude-md', (req, res) => {
+  const { cwd } = req.query;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd query parameter is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const claudeMdPath = join(cwd, 'CLAUDE.md');
+
+  if (existsSync(claudeMdPath)) {
+    try {
+      const content = readFileSync(claudeMdPath, 'utf-8');
+      res.json({ content, exists: true });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  } else {
+    res.json({ content: '', exists: false });
+  }
+});
+
+// Save CLAUDE.md content
+app.put('/api/config/claude-md', (req, res) => {
+  const { cwd, content } = req.body;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd is required' });
+  }
+
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const claudeMdPath = join(cwd, 'CLAUDE.md');
+
+  try {
+    writeFileSync(claudeMdPath, content, 'utf-8');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// CONFIG API - Commands
+// =============================================
+
+// Get commands list
+app.get('/api/config/commands', (req, res) => {
+  const { cwd } = req.query;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd query parameter is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const commandsDir = join(cwd, '.claude', 'commands');
+
+  if (!existsSync(commandsDir)) {
+    return res.json({ commands: [] });
+  }
+
+  try {
+    const entries = readdirSync(commandsDir, { withFileTypes: true });
+    const commands = entries
+      .filter(e => e.isFile() && e.name.endsWith('.md'))
+      .map(e => {
+        const name = e.name.replace(/\.md$/, '');
+        const content = readFileSync(join(commandsDir, e.name), 'utf-8');
+        return { name, content };
+      });
+    res.json({ commands });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create new command
+app.post('/api/config/commands', (req, res) => {
+  const { cwd, name, content } = req.body;
+
+  if (!cwd || !name) {
+    return res.status(400).json({ error: 'cwd and name are required' });
+  }
+
+  // Validate command name
+  if (!/^[a-zA-Z0-9-]+$/.test(name)) {
+    return res.status(400).json({ error: 'Invalid command name (alphanumeric and hyphens only)' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const commandsDir = join(cwd, '.claude', 'commands');
+  const commandPath = join(commandsDir, `${name}.md`);
+
+  // Create directories if needed
+  if (!existsSync(commandsDir)) {
+    mkdirSync(commandsDir, { recursive: true });
+  }
+
+  // Check if command already exists
+  if (existsSync(commandPath)) {
+    return res.status(409).json({ error: 'Command already exists' });
+  }
+
+  try {
+    writeFileSync(commandPath, content || '', 'utf-8');
+    res.status(201).json({ success: true, name });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update command
+app.put('/api/config/commands', (req, res) => {
+  const { cwd, name, content } = req.body;
+
+  if (!cwd || !name) {
+    return res.status(400).json({ error: 'cwd and name are required' });
+  }
+
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const commandPath = join(cwd, '.claude', 'commands', `${name}.md`);
+
+  if (!existsSync(commandPath)) {
+    return res.status(404).json({ error: 'Command not found' });
+  }
+
+  try {
+    writeFileSync(commandPath, content, 'utf-8');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete command
+app.delete('/api/config/commands', (req, res) => {
+  const { cwd, name } = req.query;
+
+  if (!cwd || !name) {
+    return res.status(400).json({ error: 'cwd and name query parameters are required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const commandPath = join(cwd, '.claude', 'commands', `${name}.md`);
+
+  if (!existsSync(commandPath)) {
+    return res.status(404).json({ error: 'Command not found' });
+  }
+
+  try {
+    unlinkSync(commandPath);
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// CONFIG API - Settings
+// =============================================
+
+// Get settings
+app.get('/api/config/settings', (req, res) => {
+  const { cwd } = req.query;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd query parameter is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const settingsPath = join(cwd, '.claude', 'settings.json');
+
+  if (existsSync(settingsPath)) {
+    try {
+      const content = readFileSync(settingsPath, 'utf-8');
+      const settings = JSON.parse(content);
+      res.json({ settings, exists: true });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  } else {
+    res.json({ settings: {}, exists: false });
+  }
+});
+
+// Save settings
+app.put('/api/config/settings', (req, res) => {
+  const { cwd, settings } = req.body;
+
+  if (!cwd) {
+    return res.status(400).json({ error: 'cwd is required' });
+  }
+
+  if (typeof settings !== 'object') {
+    return res.status(400).json({ error: 'settings object is required' });
+  }
+
+  if (!existsSync(cwd) || !statSync(cwd).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const claudeDir = join(cwd, '.claude');
+  const settingsPath = join(claudeDir, 'settings.json');
+
+  // Create .claude directory if needed
+  if (!existsSync(claudeDir)) {
+    mkdirSync(claudeDir, { recursive: true });
+  }
+
+  try {
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// TEMPLATES API - Local copy of everything-claude-code
+// =============================================
+
+// Scan templates directory recursively to find all files
+function scanTemplatesDir(dir, basePath = '') {
+  const items = [];
+
+  if (!existsSync(dir)) return items;
+
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+
+      const fullPath = join(dir, entry.name);
+      const relativePath = basePath ? `${basePath}/${entry.name}` : entry.name;
+
+      if (entry.isDirectory()) {
+        items.push(...scanTemplatesDir(fullPath, relativePath));
+      } else {
+        const stats = statSync(fullPath);
+        items.push({
+          name: entry.name,
+          path: relativePath,
+          fullPath,
+          size: stats.size,
+          isDirectory: false
+        });
+      }
+    }
+  } catch (error) {
+    console.error('Error scanning templates:', error);
+  }
+
+  return items;
+}
+
+// Check if templates repo exists and is valid
+function checkTemplatesRepo() {
+  const templatesPath = config.templatesPath;
+  if (!templatesPath || !existsSync(templatesPath)) {
+    return { exists: false, path: templatesPath };
+  }
+
+  const gitDir = join(templatesPath, '.git');
+  const isGitRepo = existsSync(gitDir);
+
+  let lastSync = null;
+  if (isGitRepo) {
+    try {
+      const result = execSync('git log -1 --format=%ci', { cwd: templatesPath, encoding: 'utf-8' });
+      lastSync = new Date(result.trim()).toISOString();
+    } catch (e) {}
+  }
+
+  return { exists: true, isGitRepo, path: templatesPath, lastSync };
+}
+
+// List available template categories (from local copy)
+app.get('/api/templates', (req, res) => {
+  const repoStatus = checkTemplatesRepo();
+
+  if (!repoStatus.exists) {
+    return res.json({
+      categories: [],
+      repoStatus,
+      error: 'Templates repository not found. Please clone it first.'
+    });
+  }
+
+  try {
+    const entries = readdirSync(config.templatesPath, { withFileTypes: true });
+    const categories = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => {
+        const categoryPath = join(config.templatesPath, e.name);
+        const files = scanTemplatesDir(categoryPath);
+        return {
+          id: e.name,
+          name: e.name.charAt(0).toUpperCase() + e.name.slice(1).replace(/-/g, ' '),
+          count: files.length
+        };
+      })
+      .filter(c => c.count > 0);
+
+    res.json({ categories, repoStatus });
+  } catch (error) {
+    res.status(500).json({ error: error.message, repoStatus });
+  }
+});
+
+// Sync templates (git pull)
+app.post('/api/templates/sync', (req, res) => {
+  const templatesPath = config.templatesPath;
+
+  if (!existsSync(templatesPath)) {
+    // Clone if doesn't exist
+    try {
+      execSync(`git clone ${config.templatesRepo} "${templatesPath}"`, { encoding: 'utf-8' });
+      res.json({ success: true, action: 'cloned' });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to clone repository: ' + error.message });
+    }
+  } else {
+    // Pull if exists
+    try {
+      const result = execSync('git pull', { cwd: templatesPath, encoding: 'utf-8' });
+      res.json({ success: true, action: 'pulled', message: result.trim() });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to pull updates: ' + error.message });
+    }
+  }
+});
+
+// List templates in a category (from local copy)
+app.get('/api/templates/:category', (req, res) => {
+  const { category } = req.params;
+  const categoryPath = join(config.templatesPath, category);
+
+  if (!existsSync(categoryPath)) {
+    return res.status(404).json({ error: 'Category not found' });
+  }
+
+  try {
+    const templates = scanTemplatesDir(categoryPath);
+    res.json({ templates, category });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get template content (from local copy)
+app.get('/api/templates/:category/*', (req, res) => {
+  const { category } = req.params;
+  const filePath = req.params[0]; // Everything after category/
+  const fullPath = join(config.templatesPath, category, filePath);
+
+  // Security: prevent path traversal
+  if (filePath.includes('..')) {
+    return res.status(403).json({ error: 'Invalid path' });
+  }
+
+  if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+    return res.status(404).json({ error: 'Template not found' });
+  }
+
+  try {
+    const content = readFileSync(fullPath, 'utf-8');
+    const name = filePath.split('/').pop();
+    res.json({ content, name, category, path: filePath });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Import template to a project
+app.post('/api/templates/import', (req, res) => {
+  const { category, templatePath, targetProject, targetPath } = req.body;
+
+  if (!category || !templatePath || !targetProject) {
+    return res.status(400).json({ error: 'category, templatePath, and targetProject are required' });
+  }
+
+  // Source path
+  const sourcePath = join(config.templatesPath, category, templatePath);
+  if (!existsSync(sourcePath)) {
+    return res.status(404).json({ error: 'Template not found' });
+  }
+
+  // Validate target project
+  if (!existsSync(targetProject) || !statSync(targetProject).isDirectory()) {
+    return res.status(404).json({ error: 'Target project not found' });
+  }
+
+  // Determine destination based on category
+  let destDir;
+  const fileName = templatePath.split('/').pop();
+
+  switch (category) {
+    case 'commands':
+      destDir = join(targetProject, '.claude', 'commands');
+      break;
+    case 'rules':
+      destDir = join(targetProject, '.claude', 'rules');
+      break;
+    case 'hooks':
+      destDir = join(targetProject, '.claude');
+      break;
+    case 'mcp-configs':
+      destDir = join(targetProject, '.claude');
+      break;
+    case 'contexts':
+      destDir = join(targetProject, '.claude', 'contexts');
+      break;
+    case 'skills':
+      destDir = join(targetProject, '.claude', 'skills');
+      break;
+    case 'agents':
+      destDir = join(targetProject, '.claude', 'agents');
+      break;
+    default:
+      destDir = targetPath ? join(targetProject, targetPath) : join(targetProject, '.claude');
+  }
+
+  // Create destination directory if needed
+  if (!existsSync(destDir)) {
+    mkdirSync(destDir, { recursive: true });
+  }
+
+  const destPath = join(destDir, fileName);
+
+  // Check if file already exists
+  const fileExists = existsSync(destPath);
+
+  try {
+    const content = readFileSync(sourcePath, 'utf-8');
+    writeFileSync(destPath, content, 'utf-8');
+    res.json({
+      success: true,
+      destination: destPath,
+      overwritten: fileExists
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

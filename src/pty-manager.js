@@ -9,13 +9,33 @@ class PtyManager {
   }
 
   create(cwd) {
+    return this._createInstance(cwd, 'claude');
+  }
+
+  createShell(cwd) {
+    return this._createInstance(cwd, 'shell');
+  }
+
+  _createInstance(cwd, type = 'claude') {
     if (this.instances.size >= this.maxInstances) {
       throw new Error(`Maximum instances limit reached (${this.maxInstances})`);
     }
 
     const id = randomUUID();
 
-    const ptyProcess = pty.spawn(config.pty.shell, config.pty.args, {
+    // Choose shell and args based on type
+    let shell, args;
+    if (type === 'shell') {
+      // Standard shell terminal
+      shell = process.env.COMSPEC || 'cmd.exe';
+      args = [];
+    } else {
+      // Claude instance
+      shell = config.pty.shell;
+      args = config.pty.args;
+    }
+
+    const ptyProcess = pty.spawn(shell, args, {
       name: 'xterm-256color',
       cols: config.terminal.defaultCols,
       rows: config.terminal.defaultRows,
@@ -27,6 +47,7 @@ class PtyManager {
       id,
       pty: ptyProcess,
       cwd,
+      type,
       status: 'active',
       createdAt: new Date().toISOString(),
       listeners: new Set(),
@@ -42,7 +63,7 @@ class PtyManager {
 
     this.instances.set(id, instance);
 
-    return { id, cwd, status: instance.status, createdAt: instance.createdAt };
+    return { id, cwd, type, status: instance.status, createdAt: instance.createdAt };
   }
 
   get(id) {
@@ -50,9 +71,10 @@ class PtyManager {
   }
 
   list() {
-    return Array.from(this.instances.values()).map(({ id, cwd, status, createdAt }) => ({
+    return Array.from(this.instances.values()).map(({ id, cwd, type, status, createdAt }) => ({
       id,
       cwd,
+      type: type || 'claude',
       status,
       createdAt,
     }));
