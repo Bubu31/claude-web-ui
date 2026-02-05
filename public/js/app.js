@@ -55,7 +55,14 @@ class App {
     this.layoutSplitBtn = document.getElementById('layout-split');
     this.layoutQuadBtn = document.getElementById('layout-quad');
 
+    // Sidebar resize elements
+    this.sidebarResizeHandle = document.getElementById('sidebar-resize-handle');
+    this.sidebarSectionInstances = document.querySelector('.sidebar-section-instances');
+    this.sidebarSectionProjects = document.querySelector('.sidebar-section-projects');
+    this.sidebarContent = document.querySelector('.sidebar-content');
+
     this._bindEvents();
+    this._initSidebarResize();
     this._bindImagePaste();
     this._bindImageDragDrop();
     this._initializeSlots();
@@ -138,6 +145,60 @@ class App {
         if (this.dragState.tabId) return;
         e.preventDefault();
       });
+    });
+  }
+
+  _initSidebarResize() {
+    if (!this.sidebarResizeHandle || !this.sidebarSectionInstances || !this.sidebarContent) return;
+
+    let isResizing = false;
+    let startY = 0;
+    let startHeight = 0;
+
+    // Load saved height from localStorage
+    const savedHeight = localStorage.getItem('sidebarInstancesHeight');
+    if (savedHeight) {
+      this.sidebarSectionInstances.style.height = savedHeight + 'px';
+      this.sidebarSectionInstances.style.maxHeight = 'none';
+      this.sidebarSectionInstances.style.flex = '0 0 auto';
+    }
+
+    const onMouseMove = (e) => {
+      if (!isResizing) return;
+
+      const deltaY = e.clientY - startY;
+      const newHeight = Math.max(60, Math.min(startHeight + deltaY, this.sidebarContent.clientHeight - 150));
+
+      this.sidebarSectionInstances.style.height = newHeight + 'px';
+      this.sidebarSectionInstances.style.maxHeight = 'none';
+      this.sidebarSectionInstances.style.flex = '0 0 auto';
+    };
+
+    const onMouseUp = () => {
+      if (!isResizing) return;
+      isResizing = false;
+      this.sidebarResizeHandle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+
+      // Save height to localStorage
+      const currentHeight = this.sidebarSectionInstances.offsetHeight;
+      localStorage.setItem('sidebarInstancesHeight', currentHeight);
+
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    this.sidebarResizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      startY = e.clientY;
+      startHeight = this.sidebarSectionInstances.offsetHeight;
+      this.sidebarResizeHandle.classList.add('dragging');
+      document.body.style.cursor = 'ns-resize';
+      document.body.style.userSelect = 'none';
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
     });
   }
 
@@ -1140,10 +1201,17 @@ class App {
           ? '<i class="fa-solid fa-terminal instance-type-icon shell" title="Terminal"></i>'
           : '<i class="fa-solid fa-robot instance-type-icon claude" title="Claude"></i>';
 
+        const shellBtn = instance.type !== 'shell'
+          ? `<button class="shell-btn" title="Ouvrir un terminal">
+              <i class="fa-solid fa-terminal"></i>
+            </button>`
+          : '';
+
         li.innerHTML = `
           <span class="status-dot ${statusClass}"></span>
           ${typeIcon}
           <span class="instance-name" title="${instance.cwd}">${folderName}</span>
+          ${shellBtn}
           <button class="md-btn" title="Voir les fichiers markdown">
             <i class="fa-brands fa-markdown"></i>
           </button>
@@ -1153,12 +1221,20 @@ class App {
         `;
 
         li.addEventListener('click', (e) => {
-          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn')) {
+          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn') && !e.target.closest('.shell-btn')) {
             // Ctrl+click adds to split view, normal click replaces
             const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
             this._selectInstance(id, addToVisible);
           }
         });
+
+        const shellBtnEl = li.querySelector('.shell-btn');
+        if (shellBtnEl) {
+          shellBtnEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._createShellInstance(instance.cwd);
+          });
+        }
 
         li.querySelector('.md-btn').addEventListener('click', (e) => {
           e.stopPropagation();

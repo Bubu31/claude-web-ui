@@ -17,29 +17,35 @@
         <h1><i class="fa-solid fa-terminal"></i> Claude Code</h1>
       </div>
 
-      <div class="sidebar-section">
-        <div class="section-header">
-          <span><i class="fa-solid fa-layer-group"></i> Instances</span>
-          <button id="new-instance-btn" class="btn-icon-sm" title="Nouvelle instance">
-            <i class="fa-solid fa-plus"></i>
-          </button>
+      <div class="sidebar-content">
+        <div class="sidebar-section sidebar-section-instances">
+          <div class="section-header">
+            <span><i class="fa-solid fa-layer-group"></i> Instances</span>
+            <button id="new-instance-btn" class="btn-icon-sm" title="Nouvelle instance">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+          </div>
+          <ul id="instances-list" class="instances-list">
+            <!-- Instances will be inserted here -->
+          </ul>
         </div>
-        <ul id="instances-list" class="instances-list">
-          <!-- Instances will be inserted here -->
-        </ul>
-      </div>
 
-      <div class="sidebar-section">
-        <div class="section-header">
-          <span><i class="fa-solid fa-folder-tree"></i> Projets</span>
-          <button id="refresh-projects-btn" class="btn-icon-sm" title="Rafraîchir">
-            <i class="fa-solid fa-rotate"></i>
-          </button>
+        <div class="sidebar-resize-handle" id="sidebar-resize-handle">
+          <div class="resize-handle-line"></div>
         </div>
-        <input type="text" id="project-filter" class="filter-input" placeholder="Filtrer les projets...">
-        <ul id="projects-list" class="projects-list">
-          <li class="loading"><i class="fa-solid fa-spinner fa-spin"></i> Scan...</li>
-        </ul>
+
+        <div class="sidebar-section sidebar-section-projects">
+          <div class="section-header">
+            <span><i class="fa-solid fa-folder-tree"></i> Projets</span>
+            <button id="refresh-projects-btn" class="btn-icon-sm" title="Rafraîchir">
+              <i class="fa-solid fa-rotate"></i>
+            </button>
+          </div>
+          <input type="text" id="project-filter" class="filter-input" placeholder="Filtrer les projets...">
+          <ul id="projects-list" class="projects-list">
+            <li class="loading"><i class="fa-solid fa-spinner fa-spin"></i> Scan...</li>
+          </ul>
+        </div>
       </div>
 
       <div class="sidebar-footer">
