@@ -55,12 +55,7 @@ class App {
     this.layoutSplitBtn = document.getElementById('layout-split');
     this.layoutQuadBtn = document.getElementById('layout-quad');
 
-    // Voice controls
-    this.voiceControlsContainer = document.getElementById('voice-controls');
-    this.voiceRecorder = null;
-
     this._bindEvents();
-    this._initVoiceControls();
     this._bindImagePaste();
     this._bindImageDragDrop();
     this._initializeSlots();
@@ -144,202 +139,6 @@ class App {
         e.preventDefault();
       });
     });
-  }
-
-  _initVoiceControls() {
-    // Check if VoiceRecorder class is available
-    if (typeof VoiceRecorder === 'undefined') {
-      console.warn('VoiceRecorder class not loaded');
-      this.voiceControlsContainer.innerHTML = '';
-      return;
-    }
-
-    // Initialize voice recorder with saved preferences
-    this.voiceRecorder = new VoiceRecorder({
-      lang: localStorage.getItem('voiceLang') || 'french',
-      deviceId: localStorage.getItem('voiceDeviceId') || null,
-    });
-
-    if (!this.voiceRecorder.isSupported) {
-      this.voiceControlsContainer.innerHTML = `
-        <div class="voice-not-supported">
-          <i class="fa-solid fa-microphone-slash"></i>
-          <span>Micro non supporte</span>
-        </div>
-      `;
-      return;
-    }
-
-    // Create voice control UI
-    const languages = VoiceRecorder.getAvailableLanguages();
-    const currentLang = this.voiceRecorder.lang;
-
-    this.voiceControlsContainer.innerHTML = `
-      <button id="voice-btn" class="btn-voice" title="Commande vocale (cliquez pour enregistrer, recliquez pour envoyer)">
-        <i class="fa-solid fa-microphone"></i>
-        <span class="voice-text">Parler</span>
-      </button>
-      <select id="voice-device" class="voice-device-select" title="Source microphone">
-        <option value="">Chargement...</option>
-      </select>
-      <select id="voice-lang" class="voice-lang-select" title="Langue de reconnaissance">
-        ${languages.map(l => `<option value="${l.code}" ${l.code === currentLang ? 'selected' : ''}>${l.label}</option>`).join('')}
-      </select>
-    `;
-
-    // Get elements
-    this.voiceBtn = document.getElementById('voice-btn');
-    this.voiceDeviceSelect = document.getElementById('voice-device');
-    this.voiceLangSelect = document.getElementById('voice-lang');
-
-    // Bind voice button click
-    this.voiceBtn.addEventListener('click', () => this._toggleVoiceRecording());
-
-    // Bind device change
-    this.voiceDeviceSelect.addEventListener('change', (e) => {
-      const deviceId = e.target.value || null;
-      this.voiceRecorder.setDevice(deviceId);
-      localStorage.setItem('voiceDeviceId', deviceId || '');
-    });
-
-    // Bind language change
-    this.voiceLangSelect.addEventListener('change', (e) => {
-      const newLang = e.target.value;
-      this.voiceRecorder.setLanguage(newLang);
-      localStorage.setItem('voiceLang', newLang);
-    });
-
-    // Load available audio devices
-    this._loadAudioDevices();
-
-    // Start watching for device changes
-    this.voiceRecorder.startDeviceWatcher();
-    this.voiceRecorder.onDevicesChanged((devices) => {
-      this._updateAudioDevicesList(devices);
-    });
-
-    // Voice recorder events
-    this.voiceRecorder.onStart(() => {
-      this.voiceBtn.classList.add('recording');
-      this.voiceBtn.querySelector('i').className = 'fa-solid fa-stop';
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Stop';
-    });
-
-    this.voiceRecorder.onStop(() => {
-      this.voiceBtn.querySelector('i').className = 'fa-solid fa-spinner fa-spin';
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Transcription...';
-    });
-
-    this.voiceRecorder.onTranscribing(() => {
-      this.voiceBtn.classList.remove('recording');
-      this.voiceBtn.classList.add('transcribing');
-      this.voiceBtn.querySelector('i').className = 'fa-solid fa-spinner fa-spin';
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Transcription...';
-    });
-
-    this.voiceRecorder.onResult(({ transcript }) => {
-      this.voiceBtn.classList.remove('transcribing');
-      this.voiceBtn.querySelector('i').className = 'fa-solid fa-microphone';
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
-      this._sendVoiceInput(transcript);
-    });
-
-    this.voiceRecorder.onError((error) => {
-      this.voiceBtn.classList.remove('recording', 'transcribing');
-      this.voiceBtn.querySelector('i').className = 'fa-solid fa-microphone';
-      this.voiceBtn.querySelector('.voice-text').textContent = 'Parler';
-
-      if (error === 'not-allowed') {
-        this._showToast('Microphone non autorise', 'error');
-      } else if (error === 'no-microphone') {
-        this._showToast('Aucun microphone detecte', 'error');
-      } else if (error === 'no-speech') {
-        this._showToast('Aucune parole detectee', 'error');
-      } else if (error === 'recording-too-short') {
-        this._showToast('Enregistrement trop court', 'error');
-      } else if (error !== 'aborted') {
-        console.error('Voice recorder error:', error);
-        this._showToast('Erreur: ' + error, 'error');
-      }
-    });
-  }
-
-  _toggleVoiceRecording() {
-    if (!this.voiceRecorder) return;
-
-    if (this.voiceRecorder.isRecording) {
-      this.voiceRecorder.stop();
-    } else {
-      // Check if we have an active instance
-      if (!this.activeInstanceId) {
-        this._showToast('Aucun terminal actif', 'error');
-        return;
-      }
-      this.voiceRecorder.start();
-    }
-  }
-
-  _sendVoiceInput(transcript) {
-    const activeInstance = this.instances.get(this.activeInstanceId);
-    if (!activeInstance || !activeInstance.ws) {
-      this._showToast('Aucun terminal actif', 'error');
-      return;
-    }
-
-    // Send the transcript to the terminal
-    activeInstance.ws.sendInput(transcript);
-
-    // Show feedback
-    const shortText = transcript.length > 50 ? transcript.substring(0, 50) + '...' : transcript;
-    this._showToast(`Envoyé: "${shortText}"`, 'success');
-
-    // Clear waiting state
-    activeInstance.waiting = false;
-    activeInstance.outputBuffer = '';
-    this._renderInstancesList();
-  }
-
-  async _loadAudioDevices() {
-    if (!this.voiceRecorder || !this.voiceDeviceSelect) return;
-
-    try {
-      const devices = await this.voiceRecorder.getAudioDevices();
-      this._updateAudioDevicesList(devices);
-    } catch (error) {
-      console.error('Failed to load audio devices:', error);
-      this.voiceDeviceSelect.innerHTML = '<option value="">Erreur</option>';
-    }
-  }
-
-  _updateAudioDevicesList(devices) {
-    if (!this.voiceDeviceSelect) return;
-
-    const savedDeviceId = localStorage.getItem('voiceDeviceId') || '';
-
-    if (devices.length === 0) {
-      this.voiceDeviceSelect.innerHTML = '<option value="">Aucun micro</option>';
-      return;
-    }
-
-    // Build options HTML
-    let optionsHtml = '<option value="">Par défaut</option>';
-    devices.forEach(device => {
-      // Skip the "default" device since we already have a "Par défaut" option
-      if (device.deviceId === 'default') return;
-
-      const selected = device.deviceId === savedDeviceId ? 'selected' : '';
-      const label = device.label.length > 30 ? device.label.substring(0, 30) + '...' : device.label;
-      optionsHtml += `<option value="${device.deviceId}" ${selected}>${label}</option>`;
-    });
-
-    this.voiceDeviceSelect.innerHTML = optionsHtml;
-
-    // Verify saved device still exists, otherwise reset
-    if (savedDeviceId && !devices.some(d => d.deviceId === savedDeviceId)) {
-      localStorage.removeItem('voiceDeviceId');
-      this.voiceRecorder.setDevice(null);
-      this.voiceDeviceSelect.value = '';
-    }
   }
 
   _hasDraggedImage(e) {
@@ -1345,9 +1144,6 @@ class App {
           <span class="status-dot ${statusClass}"></span>
           ${typeIcon}
           <span class="instance-name" title="${instance.cwd}">${folderName}</span>
-          <button class="config-btn" title="Configuration du projet">
-            <i class="fa-solid fa-gear"></i>
-          </button>
           <button class="md-btn" title="Voir les fichiers markdown">
             <i class="fa-brands fa-markdown"></i>
           </button>
@@ -1357,16 +1153,11 @@ class App {
         `;
 
         li.addEventListener('click', (e) => {
-          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn') && !e.target.closest('.config-btn')) {
+          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn')) {
             // Ctrl+click adds to split view, normal click replaces
             const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
             this._selectInstance(id, addToVisible);
           }
-        });
-
-        li.querySelector('.config-btn').addEventListener('click', (e) => {
-          e.stopPropagation();
-          this._showConfigPanel(instance.cwd, folderName);
         });
 
         li.querySelector('.md-btn').addEventListener('click', (e) => {
@@ -1455,9 +1246,6 @@ class App {
         <button class="shell-btn" title="Ouvrir un terminal">
           <i class="fa-solid fa-terminal"></i>
         </button>
-        <button class="config-btn" title="Configuration du projet">
-          <i class="fa-solid fa-gear"></i>
-        </button>
         <button class="md-btn" title="Voir les fichiers markdown">
           <i class="fa-brands fa-markdown"></i>
         </button>
@@ -1465,7 +1253,7 @@ class App {
 
       // Click on project name creates instance
       li.addEventListener('click', (e) => {
-        if (!e.target.closest('.md-btn') && !e.target.closest('.config-btn') && !e.target.closest('.shell-btn')) {
+        if (!e.target.closest('.md-btn') && !e.target.closest('.shell-btn')) {
           this._createInstance(project.path);
         }
       });
@@ -1474,12 +1262,6 @@ class App {
       li.querySelector('.shell-btn').addEventListener('click', (e) => {
         e.stopPropagation();
         this._createShellInstance(project.path);
-      });
-
-      // Click on config button opens config panel
-      li.querySelector('.config-btn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._showConfigPanel(project.path, project.name);
       });
 
       // Click on markdown button opens markdown modal
