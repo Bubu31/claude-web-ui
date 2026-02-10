@@ -20,9 +20,11 @@ class App {
     this.sessionValue = document.getElementById('session-value');
     this.sessionBar = document.getElementById('session-bar');
     this.sessionReset = document.getElementById('session-reset');
+    this.sessionStatus = document.getElementById('session-status');
     this.weeklyValue = document.getElementById('weekly-value');
     this.weeklyBar = document.getElementById('weekly-bar');
     this.weeklyReset = document.getElementById('weekly-reset');
+    this.weeklyStatus = document.getElementById('weekly-status');
     this.terminalContainer = document.getElementById('terminal-container');
     this.emptyState = document.getElementById('empty-state');
     this.newInstanceBtn = document.getElementById('new-instance-btn');
@@ -451,7 +453,7 @@ class App {
         const pct = Math.round(data.fiveHour.percentage);
         this.sessionValue.textContent = `${pct}%`;
         this.sessionBar.style.width = `${Math.min(pct, 100)}%`;
-        this._setBarColor(this.sessionBar, pct);
+        this._setBarColor(this.sessionBar, this.sessionValue, this.sessionStatus, pct, data.fiveHour.minutesUntilReset, 300);
 
         if (data.fiveHour.minutesUntilReset) {
           this.sessionReset.textContent = `Reset dans ${this._formatTime(data.fiveHour.minutesUntilReset)}`;
@@ -463,7 +465,7 @@ class App {
         const pct = Math.round(data.sevenDay.percentage);
         this.weeklyValue.textContent = `${pct}%`;
         this.weeklyBar.style.width = `${Math.min(pct, 100)}%`;
-        this._setBarColor(this.weeklyBar, pct);
+        this._setBarColor(this.weeklyBar, this.weeklyValue, this.weeklyStatus, pct, data.sevenDay.minutesUntilReset, 10080);
 
         if (data.sevenDay.minutesUntilReset) {
           this.weeklyReset.textContent = `Reset dans ${this._formatTime(data.sevenDay.minutesUntilReset)}`;
@@ -474,13 +476,53 @@ class App {
     }
   }
 
-  _setBarColor(bar, percentage) {
-    bar.classList.remove('warning', 'danger');
-    if (percentage >= 90) {
-      bar.classList.add('danger');
-    } else if (percentage >= 70) {
-      bar.classList.add('warning');
+  _getUsageHealthLevel(percentage, minutesUntilReset, totalMinutes) {
+    const timeElapsedPct = (totalMinutes - minutesUntilReset) / totalMinutes * 100;
+    const timeRemainingPct = (minutesUntilReset / totalMinutes) * 100;
+
+    // Edge case: near end of window (< 5% remaining) — use absolute thresholds
+    if (timeRemainingPct < 5) {
+      if (percentage >= 90) return 'danger';
+      if (percentage >= 70) return 'warning';
+      return 'good';
     }
+
+    // Edge case: window just started (< 5% elapsed) — use wider absolute thresholds
+    if (timeElapsedPct < 5) {
+      if (percentage >= 50) return 'danger';
+      if (percentage >= 25) return 'warning';
+      return 'good';
+    }
+
+    // Normal case: compare usage to ideal pace
+    const delta = percentage - timeElapsedPct;
+    if (delta > 20) return 'danger';
+    if (delta > 5) return 'warning';
+    return 'good';
+  }
+
+  _setBarColor(bar, percentEl, statusEl, percentage, minutesUntilReset, totalMinutes) {
+    const levels = ['good', 'warning', 'danger'];
+    bar.classList.remove(...levels);
+    percentEl.classList.remove(...levels);
+    statusEl.classList.remove(...levels);
+
+    let level;
+    if (minutesUntilReset != null && totalMinutes) {
+      level = this._getUsageHealthLevel(percentage, minutesUntilReset, totalMinutes);
+    } else {
+      // Fallback to simple thresholds if no timing data
+      if (percentage >= 90) level = 'danger';
+      else if (percentage >= 70) level = 'warning';
+      else level = 'good';
+    }
+
+    bar.classList.add(level);
+    percentEl.classList.add(level);
+    statusEl.classList.add(level);
+
+    const labels = { good: 'Bon rythme', warning: 'Vigilance', danger: 'Critique' };
+    statusEl.textContent = labels[level];
   }
 
   _formatTime(minutes) {

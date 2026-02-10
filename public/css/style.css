@@ -527,13 +527,6 @@ body {
   text-align: center;
 }
 
-.usage-percent {
-  font-size: 0.75rem;
-  color: var(--text);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
 .usage-bar {
   height: 4px;
   background-color: var(--bg-secondary);
@@ -548,6 +541,10 @@ body {
   transition: width 0.3s ease, background-color 0.3s ease;
 }
 
+.usage-fill.good {
+  background-color: var(--accent-active);
+}
+
 .usage-fill.warning {
   background-color: var(--warning);
 }
@@ -556,10 +553,50 @@ body {
   background-color: var(--danger);
 }
 
+.usage-percent {
+  font-size: 0.75rem;
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  transition: color 0.3s ease;
+}
+
+.usage-percent.good {
+  color: var(--accent-active);
+}
+
+.usage-percent.warning {
+  color: var(--warning);
+}
+
+.usage-percent.danger {
+  color: var(--danger);
+}
+
 .usage-reset {
   font-size: 0.65rem;
   color: var(--text-muted);
   opacity: 0.7;
+}
+
+.usage-status {
+  font-size: 0.6rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  transition: color 0.3s ease;
+}
+
+.usage-status.good {
+  color: var(--accent-active);
+}
+
+.usage-status.warning {
+  color: var(--warning);
+}
+
+.usage-status.danger {
+  color: var(--danger);
 }
 
 /* Main Content */
