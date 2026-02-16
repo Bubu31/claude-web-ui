@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync, symlinkSync, lstatSync, readlinkSync } from 'fs';
+import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, rmSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { execFileSync, execSync } from 'child_process';
 import multer from 'multer';
@@ -758,13 +758,22 @@ app.get('/api/skills-library', (req, res) => {
       .filter(e => e.isDirectory() && !e.name.startsWith('.'))
       .map(e => {
         const catPath = join(libPath, e.name);
-        const files = readdirSync(catPath, { withFileTypes: true });
-        const skills = files
-          .filter(f => f.isFile() && f.name.endsWith('.md'))
-          .map(f => ({
-            name: f.name.replace(/\.md$/, ''),
-            category: e.name,
-          }));
+        const items = readdirSync(catPath, { withFileTypes: true });
+        const skills = [];
+
+        for (const item of items) {
+          if (item.isDirectory() && !item.name.startsWith('.')) {
+            // Directory format: category/skill-name/SKILL.md
+            const skillFile = join(catPath, item.name, 'SKILL.md');
+            if (existsSync(skillFile)) {
+              skills.push({ name: item.name, category: e.name });
+            }
+          } else if (item.isFile() && item.name.endsWith('.md')) {
+            // Legacy flat format: category/skill-name.md
+            skills.push({ name: item.name.replace(/\.md$/, ''), category: e.name });
+          }
+        }
+
         return { name: e.name, skills };
       });
 
@@ -787,18 +796,20 @@ app.post('/api/skills-library', (req, res) => {
   }
 
   const catPath = join(config.skillsLibraryPath, category);
-  const skillPath = join(catPath, `${name}.md`);
+  const skillDir = join(catPath, name);
+  const skillPath = join(skillDir, 'SKILL.md');
 
   // Create category directory if needed
   if (!existsSync(catPath)) {
     mkdirSync(catPath, { recursive: true });
   }
 
-  if (existsSync(skillPath)) {
+  if (existsSync(skillDir)) {
     return res.status(409).json({ error: 'Skill already exists' });
   }
 
   try {
+    mkdirSync(skillDir, { recursive: true });
     writeFileSync(skillPath, content || '', 'utf-8');
     res.status(201).json({ success: true, name, category });
   } catch (error) {
@@ -814,7 +825,10 @@ app.get('/api/skills-library/:category/:name', (req, res) => {
     return res.status(400).json({ error: 'Invalid name' });
   }
 
-  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  // Support both directory format (category/name/SKILL.md) and legacy flat format (category/name.md)
+  const skillDirPath = join(config.skillsLibraryPath, category, name, 'SKILL.md');
+  const skillFlatPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  const skillPath = existsSync(skillDirPath) ? skillDirPath : skillFlatPath;
 
   if (!existsSync(skillPath)) {
     return res.status(404).json({ error: 'Skill not found' });
@@ -841,7 +855,10 @@ app.put('/api/skills-library/:category/:name', (req, res) => {
     return res.status(400).json({ error: 'content is required' });
   }
 
-  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  // Support both directory format and legacy flat format
+  const skillDirPath = join(config.skillsLibraryPath, category, name, 'SKILL.md');
+  const skillFlatPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  const skillPath = existsSync(skillDirPath) ? skillDirPath : skillFlatPath;
 
   if (!existsSync(skillPath)) {
     return res.status(404).json({ error: 'Skill not found' });
@@ -863,28 +880,38 @@ app.delete('/api/skills-library/:category/:name', (req, res) => {
     return res.status(400).json({ error: 'Invalid name' });
   }
 
-  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  // Support both directory format and legacy flat format
+  const skillDirPath = join(config.skillsLibraryPath, category, name);
+  const skillFlatPath = join(config.skillsLibraryPath, category, `${name}.md`);
+  const isDir = existsSync(join(skillDirPath, 'SKILL.md'));
+  const isFlat = !isDir && existsSync(skillFlatPath);
 
-  if (!existsSync(skillPath)) {
+  if (!isDir && !isFlat) {
     return res.status(404).json({ error: 'Skill not found' });
   }
 
   try {
-    unlinkSync(skillPath);
+    if (isDir) {
+      rmSync(skillDirPath, { recursive: true, force: true });
+    } else {
+      unlinkSync(skillFlatPath);
+    }
 
     // Cleanup symlinks in all projects pointing to this skill
     const projects = scanProjects(config.projectsRoot, config.projectMarker);
     for (const project of projects) {
-      const symlinkPath = join(project.path, '.claude', 'skills', `${name}.md`);
-      try {
-        if (existsSync(symlinkPath)) {
+      // Check both directory symlink and legacy .md symlink
+      const symlinkDir = join(project.path, '.claude', 'skills', name);
+      const symlinkMd = join(project.path, '.claude', 'skills', `${name}.md`);
+      for (const symlinkPath of [symlinkDir, symlinkMd]) {
+        try {
           const stats = lstatSync(symlinkPath);
           if (stats.isSymbolicLink()) {
             unlinkSync(symlinkPath);
           }
+        } catch (e) {
+          // Ignore per-project cleanup errors (file not found, etc.)
         }
-      } catch (e) {
-        // Ignore per-project cleanup errors
       }
     }
 
@@ -923,12 +950,17 @@ app.get('/api/projects/:projectPath/skills', (req, res) => {
     const skills = [];
 
     for (const entry of entries) {
-      if (!entry.name.endsWith('.md')) continue;
-
       const fullPath = join(skillsDir, entry.name);
       const lstats = lstatSync(fullPath);
+
+      // Support both: directory skills (name/) and legacy flat skills (name.md)
+      const isDirectory = lstats.isDirectory() || (lstats.isSymbolicLink() && existsSync(fullPath) && statSync(fullPath).isDirectory());
+      const isMdFile = entry.name.endsWith('.md') && (lstats.isFile() || (lstats.isSymbolicLink() && existsSync(fullPath) && statSync(fullPath).isFile()));
+
+      if (!isDirectory && !isMdFile) continue;
+
       const skill = {
-        name: entry.name.replace(/\.md$/, ''),
+        name: isDirectory ? entry.name : entry.name.replace(/\.md$/, ''),
         isSymlink: lstats.isSymbolicLink(),
         broken: false,
         target: null,
@@ -979,13 +1011,19 @@ app.post('/api/projects/:projectPath/skills', (req, res) => {
     return res.status(404).json({ error: 'Project not found' });
   }
 
-  const sourcePath = join(config.skillsLibraryPath, category, `${skillName}.md`);
-  if (!existsSync(sourcePath)) {
+  // Support both directory format (category/skillName/) and legacy flat format (category/skillName.md)
+  const sourceDirPath = join(config.skillsLibraryPath, category, skillName);
+  const sourceFlatPath = join(config.skillsLibraryPath, category, `${skillName}.md`);
+  const isDir = existsSync(join(sourceDirPath, 'SKILL.md'));
+  const sourcePath = isDir ? sourceDirPath : sourceFlatPath;
+
+  if (!existsSync(isDir ? join(sourceDirPath, 'SKILL.md') : sourceFlatPath)) {
     return res.status(404).json({ error: 'Skill not found in library' });
   }
 
   const skillsDir = join(projectPath, '.claude', 'skills');
-  const symlinkPath = join(skillsDir, `${skillName}.md`);
+  // Directory symlink for dir format, .md symlink for legacy
+  const symlinkPath = isDir ? join(skillsDir, skillName) : join(skillsDir, `${skillName}.md`);
 
   // Create .claude/skills/ if absent
   if (!existsSync(skillsDir)) {
@@ -997,7 +1035,7 @@ app.post('/api/projects/:projectPath/skills', (req, res) => {
   }
 
   try {
-    symlinkSync(sourcePath, symlinkPath);
+    symlinkSync(sourcePath, symlinkPath, isDir ? 'junction' : 'file');
     res.status(201).json({ success: true, skillName, category });
   } catch (error) {
     if (error.code === 'EPERM') {
@@ -1024,17 +1062,43 @@ app.delete('/api/projects/:projectPath/skills/:skillName', (req, res) => {
     return res.status(403).json({ error: 'Access denied' });
   }
 
-  const symlinkPath = join(projectPath, '.claude', 'skills', `${skillName}.md`);
+  // Support both directory symlink and legacy .md symlink
+  const symlinkDirPath = join(projectPath, '.claude', 'skills', skillName);
+  const symlinkMdPath = join(projectPath, '.claude', 'skills', `${skillName}.md`);
 
-  if (!existsSync(symlinkPath)) {
+  // Check directory symlink first (lstat to detect broken symlinks too)
+  let symlinkPath = null;
+  try {
+    lstatSync(symlinkDirPath);
+    symlinkPath = symlinkDirPath;
+  } catch (e) {
+    // Not a directory symlink, try .md
+  }
+  if (!symlinkPath) {
+    try {
+      lstatSync(symlinkMdPath);
+      symlinkPath = symlinkMdPath;
+    } catch (e) {
+      // Not found either
+    }
+  }
+
+  if (!symlinkPath) {
     return res.status(404).json({ error: 'Skill not assigned' });
   }
 
   try {
+    // For junction/directory symlinks on Windows, unlinkSync works for junctions
     unlinkSync(symlinkPath);
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    // Fallback: try rmSync for directory symlinks
+    try {
+      rmSync(symlinkPath, { recursive: true, force: true });
+      res.json({ success: true });
+    } catch (error2) {
+      res.status(500).json({ error: error2.message });
+    }
   }
 });
 
