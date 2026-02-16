@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync, symlinkSync, lstatSync, readlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { execFileSync, execSync } from 'child_process';
 import multer from 'multer';
@@ -730,6 +730,309 @@ app.post('/api/templates/import', (req, res) => {
       destination: destPath,
       overwritten: fileExists
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// SKILLS LIBRARY API
+// =============================================
+
+// Validate skill/category names: alphanumeric + hyphens only, no path traversal
+function isValidSkillName(name) {
+  return /^[a-zA-Z0-9-]+$/.test(name) && !name.includes('..');
+}
+
+// List all skills in the library grouped by category
+app.get('/api/skills-library', (req, res) => {
+  const libPath = config.skillsLibraryPath;
+
+  if (!existsSync(libPath)) {
+    return res.json({ categories: [] });
+  }
+
+  try {
+    const entries = readdirSync(libPath, { withFileTypes: true });
+    const categories = entries
+      .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+      .map(e => {
+        const catPath = join(libPath, e.name);
+        const files = readdirSync(catPath, { withFileTypes: true });
+        const skills = files
+          .filter(f => f.isFile() && f.name.endsWith('.md'))
+          .map(f => ({
+            name: f.name.replace(/\.md$/, ''),
+            category: e.name,
+          }));
+        return { name: e.name, skills };
+      });
+
+    res.json({ categories });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create a new skill in the library
+app.post('/api/skills-library', (req, res) => {
+  const { category, name, content } = req.body;
+
+  if (!category || !name) {
+    return res.status(400).json({ error: 'category and name are required' });
+  }
+
+  if (!isValidSkillName(category) || !isValidSkillName(name)) {
+    return res.status(400).json({ error: 'Invalid name (alphanumeric and hyphens only)' });
+  }
+
+  const catPath = join(config.skillsLibraryPath, category);
+  const skillPath = join(catPath, `${name}.md`);
+
+  // Create category directory if needed
+  if (!existsSync(catPath)) {
+    mkdirSync(catPath, { recursive: true });
+  }
+
+  if (existsSync(skillPath)) {
+    return res.status(409).json({ error: 'Skill already exists' });
+  }
+
+  try {
+    writeFileSync(skillPath, content || '', 'utf-8');
+    res.status(201).json({ success: true, name, category });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get skill content
+app.get('/api/skills-library/:category/:name', (req, res) => {
+  const { category, name } = req.params;
+
+  if (!isValidSkillName(category) || !isValidSkillName(name)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+
+  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+
+  if (!existsSync(skillPath)) {
+    return res.status(404).json({ error: 'Skill not found' });
+  }
+
+  try {
+    const content = readFileSync(skillPath, 'utf-8');
+    res.json({ content, name, category });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update skill content
+app.put('/api/skills-library/:category/:name', (req, res) => {
+  const { category, name } = req.params;
+  const { content } = req.body;
+
+  if (!isValidSkillName(category) || !isValidSkillName(name)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+
+  if (typeof content !== 'string') {
+    return res.status(400).json({ error: 'content is required' });
+  }
+
+  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+
+  if (!existsSync(skillPath)) {
+    return res.status(404).json({ error: 'Skill not found' });
+  }
+
+  try {
+    writeFileSync(skillPath, content, 'utf-8');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete skill from library + cleanup symlinks in all projects
+app.delete('/api/skills-library/:category/:name', (req, res) => {
+  const { category, name } = req.params;
+
+  if (!isValidSkillName(category) || !isValidSkillName(name)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+
+  const skillPath = join(config.skillsLibraryPath, category, `${name}.md`);
+
+  if (!existsSync(skillPath)) {
+    return res.status(404).json({ error: 'Skill not found' });
+  }
+
+  try {
+    unlinkSync(skillPath);
+
+    // Cleanup symlinks in all projects pointing to this skill
+    const projects = scanProjects(config.projectsRoot, config.projectMarker);
+    for (const project of projects) {
+      const symlinkPath = join(project.path, '.claude', 'skills', `${name}.md`);
+      try {
+        if (existsSync(symlinkPath)) {
+          const stats = lstatSync(symlinkPath);
+          if (stats.isSymbolicLink()) {
+            unlinkSync(symlinkPath);
+          }
+        }
+      } catch (e) {
+        // Ignore per-project cleanup errors
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// =============================================
+// SKILLS PER PROJECT API
+// =============================================
+
+// List skills assigned to a project
+app.get('/api/projects/:projectPath/skills', (req, res) => {
+  const projectPath = decodeURIComponent(req.params.projectPath);
+
+  // Security: validate path is within projectsRoot
+  const normalizedPath = join(projectPath);
+  if (!normalizedPath.startsWith(config.projectsRoot)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const skillsDir = join(projectPath, '.claude', 'skills');
+
+  if (!existsSync(skillsDir)) {
+    return res.json({ skills: [] });
+  }
+
+  try {
+    const entries = readdirSync(skillsDir, { withFileTypes: true });
+    const skills = [];
+
+    for (const entry of entries) {
+      if (!entry.name.endsWith('.md')) continue;
+
+      const fullPath = join(skillsDir, entry.name);
+      const lstats = lstatSync(fullPath);
+      const skill = {
+        name: entry.name.replace(/\.md$/, ''),
+        isSymlink: lstats.isSymbolicLink(),
+        broken: false,
+        target: null,
+      };
+
+      if (lstats.isSymbolicLink()) {
+        try {
+          const target = readlinkSync(fullPath);
+          skill.target = target;
+          // Check if target exists
+          if (!existsSync(fullPath)) {
+            skill.broken = true;
+          }
+        } catch (e) {
+          skill.broken = true;
+        }
+      }
+
+      skills.push(skill);
+    }
+
+    res.json({ skills });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Assign a skill to a project (create symlink)
+app.post('/api/projects/:projectPath/skills', (req, res) => {
+  const projectPath = decodeURIComponent(req.params.projectPath);
+  const { category, skillName } = req.body;
+
+  if (!category || !skillName) {
+    return res.status(400).json({ error: 'category and skillName are required' });
+  }
+
+  if (!isValidSkillName(category) || !isValidSkillName(skillName)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+
+  // Security: validate path is within projectsRoot
+  const normalizedPath = join(projectPath);
+  if (!normalizedPath.startsWith(config.projectsRoot)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return res.status(404).json({ error: 'Project not found' });
+  }
+
+  const sourcePath = join(config.skillsLibraryPath, category, `${skillName}.md`);
+  if (!existsSync(sourcePath)) {
+    return res.status(404).json({ error: 'Skill not found in library' });
+  }
+
+  const skillsDir = join(projectPath, '.claude', 'skills');
+  const symlinkPath = join(skillsDir, `${skillName}.md`);
+
+  // Create .claude/skills/ if absent
+  if (!existsSync(skillsDir)) {
+    mkdirSync(skillsDir, { recursive: true });
+  }
+
+  if (existsSync(symlinkPath)) {
+    return res.status(409).json({ error: 'Skill already assigned' });
+  }
+
+  try {
+    symlinkSync(sourcePath, symlinkPath);
+    res.status(201).json({ success: true, skillName, category });
+  } catch (error) {
+    if (error.code === 'EPERM') {
+      return res.status(403).json({
+        error: 'Permission denied. On Windows, enable Developer Mode in Settings > For developers, or run as administrator to create symlinks.'
+      });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Unassign a skill from a project (remove symlink)
+app.delete('/api/projects/:projectPath/skills/:skillName', (req, res) => {
+  const projectPath = decodeURIComponent(req.params.projectPath);
+  const { skillName } = req.params;
+
+  if (!isValidSkillName(skillName)) {
+    return res.status(400).json({ error: 'Invalid skill name' });
+  }
+
+  // Security: validate path is within projectsRoot
+  const normalizedPath = join(projectPath);
+  if (!normalizedPath.startsWith(config.projectsRoot)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  const symlinkPath = join(projectPath, '.claude', 'skills', `${skillName}.md`);
+
+  if (!existsSync(symlinkPath)) {
+    return res.status(404).json({ error: 'Skill not assigned' });
+  }
+
+  try {
+    unlinkSync(symlinkPath);
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

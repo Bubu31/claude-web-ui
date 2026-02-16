@@ -110,6 +110,10 @@ class App {
         if (!this.cookieModalOverlay.classList.contains('hidden')) {
           this._hideCookieModal();
         }
+        const skillsOverlay = document.getElementById('skills-modal-overlay');
+        if (skillsOverlay && !skillsOverlay.classList.contains('hidden')) {
+          this._hideSkillsModal();
+        }
       }
     });
 
@@ -138,6 +142,9 @@ class App {
     window.addEventListener('resize', () => {
       this._fitVisibleTerminals();
     });
+
+    // Skills modal events
+    this._bindSkillsEvents();
   }
 
   _bindImagePaste() {
@@ -1281,6 +1288,9 @@ class App {
           <span class="status-dot ${statusClass}"></span>
           ${typeIcon}
           <span class="instance-name" title="${instance.cwd}">${folderName}</span>
+          <button class="skills-btn" title="Gérer les skills">
+            <i class="fa-solid fa-wand-magic-sparkles"></i>
+          </button>
           ${shellBtn}
           <button class="md-btn" title="Voir les fichiers markdown">
             <i class="fa-brands fa-markdown"></i>
@@ -1291,11 +1301,16 @@ class App {
         `;
 
         li.addEventListener('click', (e) => {
-          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn') && !e.target.closest('.shell-btn')) {
+          if (!e.target.closest('.close-btn') && !e.target.closest('.md-btn') && !e.target.closest('.shell-btn') && !e.target.closest('.skills-btn')) {
             // Ctrl+click adds to split view, normal click replaces
             const addToVisible = e.ctrlKey && this.layoutMode !== 'single';
             this._selectInstance(id, addToVisible);
           }
+        });
+
+        li.querySelector('.skills-btn').addEventListener('click', (e) => {
+          e.stopPropagation();
+          this._showSkillsModal(instance.cwd, folderName);
         });
 
         const shellBtnEl = li.querySelector('.shell-btn');
@@ -1389,6 +1404,9 @@ class App {
       li.innerHTML = `
         <i class="fa-solid fa-folder"></i>
         <span>${project.name}</span>
+        <button class="skills-btn" title="Gérer les skills">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+        </button>
         <button class="shell-btn" title="Ouvrir un terminal">
           <i class="fa-solid fa-terminal"></i>
         </button>
@@ -1399,9 +1417,15 @@ class App {
 
       // Click on project name creates instance
       li.addEventListener('click', (e) => {
-        if (!e.target.closest('.md-btn') && !e.target.closest('.shell-btn')) {
+        if (!e.target.closest('.md-btn') && !e.target.closest('.shell-btn') && !e.target.closest('.skills-btn')) {
           this._createInstance(project.path);
         }
+      });
+
+      // Click on skills button opens skills modal
+      li.querySelector('.skills-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showSkillsModal(project.path, project.name);
       });
 
       // Click on shell button opens a standard terminal
@@ -3027,6 +3051,376 @@ class App {
           this.restartServerBtn.disabled = false;
         }
       });
+  }
+
+  // =============================================
+  // SKILLS LIBRARY
+  // =============================================
+
+  _bindSkillsEvents() {
+    const overlay = document.getElementById('skills-modal-overlay');
+    const closeBtn = document.getElementById('skills-modal-close');
+    const closeBottomBtn = document.getElementById('skills-modal-close-btn');
+    const addBtn = document.getElementById('skills-add-btn');
+    const editorBack = document.getElementById('skills-editor-back');
+    const editorSave = document.getElementById('skills-editor-save');
+    const editorDelete = document.getElementById('skills-editor-delete');
+
+    if (!overlay) return;
+
+    closeBtn.addEventListener('click', () => this._hideSkillsModal());
+    closeBottomBtn.addEventListener('click', () => this._hideSkillsModal());
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) this._hideSkillsModal();
+    });
+
+    addBtn.addEventListener('click', () => this._showSkillEditor());
+    editorBack.addEventListener('click', () => this._hideSkillEditor());
+    editorSave.addEventListener('click', () => this._saveSkill());
+    editorDelete.addEventListener('click', () => this._deleteSkillFromEditor());
+  }
+
+  async _showSkillsModal(projectPath, projectName) {
+    this._skillsProjectPath = projectPath;
+    this._skillsProjectName = projectName;
+    this._skillsLibraryData = [];
+    this._skillsAssignedData = [];
+    this._skillsActiveCategory = 'all';
+
+    document.getElementById('skills-project-name').textContent = projectName;
+    document.getElementById('skills-modal-overlay').classList.remove('hidden');
+
+    // Hide editor, show main layout
+    document.getElementById('skills-editor').classList.add('hidden');
+    document.querySelector('.skills-layout').style.display = '';
+
+    // Load data in parallel
+    await Promise.all([
+      this._loadSkillsLibrary(),
+      this._loadAssignedSkills(projectPath),
+    ]);
+
+    this._renderSkillsLibrary();
+    this._renderAssignedSkills();
+  }
+
+  _hideSkillsModal() {
+    document.getElementById('skills-modal-overlay').classList.add('hidden');
+    this._skillsProjectPath = null;
+  }
+
+  async _loadSkillsLibrary() {
+    try {
+      const res = await fetch('/api/skills-library');
+      const data = await res.json();
+      this._skillsLibraryData = data.categories || [];
+    } catch (error) {
+      this._showToast('Erreur chargement bibliothèque', 'error');
+      this._skillsLibraryData = [];
+    }
+  }
+
+  async _loadAssignedSkills(projectPath) {
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectPath)}/skills`);
+      const data = await res.json();
+      this._skillsAssignedData = data.skills || [];
+    } catch (error) {
+      this._showToast('Erreur chargement skills projet', 'error');
+      this._skillsAssignedData = [];
+    }
+  }
+
+  _renderSkillsLibrary() {
+    const tabsContainer = document.getElementById('skills-category-tabs');
+    const listContainer = document.getElementById('skills-library-list');
+    const assignedNames = new Set(this._skillsAssignedData.map(s => s.name));
+
+    // Build category tabs
+    const categories = this._skillsLibraryData.map(c => c.name);
+    tabsContainer.innerHTML = `
+      <button class="skill-category-tab ${this._skillsActiveCategory === 'all' ? 'active' : ''}" data-category="all">Tous</button>
+      ${categories.map(cat => `
+        <button class="skill-category-tab ${this._skillsActiveCategory === cat ? 'active' : ''}" data-category="${cat}">${cat}</button>
+      `).join('')}
+    `;
+
+    // Bind tab clicks
+    tabsContainer.querySelectorAll('.skill-category-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        this._skillsActiveCategory = tab.dataset.category;
+        this._renderSkillsLibrary();
+      });
+    });
+
+    // Build skills list
+    let allSkills = [];
+    for (const cat of this._skillsLibraryData) {
+      for (const skill of cat.skills) {
+        if (this._skillsActiveCategory === 'all' || this._skillsActiveCategory === cat.name) {
+          allSkills.push(skill);
+        }
+      }
+    }
+
+    if (allSkills.length === 0) {
+      listContainer.innerHTML = `
+        <div class="skills-empty">
+          <i class="fa-solid fa-wand-magic-sparkles"></i>
+          <span>Aucun skill dans la bibliothèque</span>
+          <span>Cliquez sur + pour en créer un</span>
+        </div>
+      `;
+      return;
+    }
+
+    listContainer.innerHTML = allSkills.map(skill => `
+      <div class="skill-item" data-name="${skill.name}" data-category="${skill.category}">
+        <input type="checkbox" class="skill-checkbox" ${assignedNames.has(skill.name) ? 'checked' : ''}>
+        <span class="skill-name">${skill.name}</span>
+        <span class="skill-category-badge">${skill.category}</span>
+        <div class="skill-actions">
+          <button class="skill-action-btn skill-edit-btn" title="Modifier"><i class="fa-solid fa-pen"></i></button>
+          <button class="skill-action-btn btn-danger-icon skill-delete-btn" title="Supprimer"><i class="fa-solid fa-trash"></i></button>
+        </div>
+      </div>
+    `).join('');
+
+    // Bind checkbox and action events
+    listContainer.querySelectorAll('.skill-item').forEach(item => {
+      const name = item.dataset.name;
+      const category = item.dataset.category;
+      const checkbox = item.querySelector('.skill-checkbox');
+
+      checkbox.addEventListener('change', async () => {
+        if (checkbox.checked) {
+          await this._assignSkill(category, name);
+        } else {
+          await this._unassignSkill(name);
+        }
+      });
+
+      item.querySelector('.skill-edit-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._showSkillEditor({ name, category });
+      });
+
+      item.querySelector('.skill-delete-btn').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (confirm(`Supprimer le skill "${name}" de la bibliothèque ?`)) {
+          await this._deleteSkill(category, name);
+        }
+      });
+    });
+  }
+
+  _renderAssignedSkills() {
+    const listContainer = document.getElementById('skills-assigned-list');
+    const countEl = document.getElementById('skills-assigned-count');
+
+    countEl.textContent = `(${this._skillsAssignedData.length})`;
+
+    if (this._skillsAssignedData.length === 0) {
+      listContainer.innerHTML = `
+        <div class="skills-empty">
+          <i class="fa-solid fa-link"></i>
+          <span>Aucun skill assigné</span>
+          <span>Cochez des skills dans la bibliothèque</span>
+        </div>
+      `;
+      return;
+    }
+
+    listContainer.innerHTML = this._skillsAssignedData.map(skill => `
+      <div class="skill-assigned-item ${skill.broken ? 'skill-broken' : ''}" data-name="${skill.name}">
+        ${skill.broken ? '<i class="fa-solid fa-triangle-exclamation skill-broken-icon" title="Symlink cassé"></i>' : '<i class="fa-solid fa-link" style="font-size:0.7rem;color:var(--text-muted)"></i>'}
+        <span class="skill-name">${skill.name}</span>
+        ${skill.isSymlink ? '<span class="skill-category-badge">symlink</span>' : ''}
+        <button class="skill-remove-btn" title="Retirer"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+    `).join('');
+
+    // Bind remove buttons
+    listContainer.querySelectorAll('.skill-assigned-item').forEach(item => {
+      const name = item.dataset.name;
+      item.querySelector('.skill-remove-btn').addEventListener('click', async () => {
+        await this._unassignSkill(name);
+      });
+    });
+  }
+
+  async _assignSkill(category, skillName) {
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(this._skillsProjectPath)}/skills`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category, skillName }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      this._showToast(`Skill "${skillName}" assigné`, 'success');
+      await this._loadAssignedSkills(this._skillsProjectPath);
+      this._renderAssignedSkills();
+      this._renderSkillsLibrary();
+    } catch (error) {
+      this._showToast(error.message, 'error');
+      // Re-render to reset checkbox state
+      this._renderSkillsLibrary();
+    }
+  }
+
+  async _unassignSkill(skillName) {
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(this._skillsProjectPath)}/skills/${encodeURIComponent(skillName)}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      this._showToast(`Skill "${skillName}" retiré`, 'success');
+      await this._loadAssignedSkills(this._skillsProjectPath);
+      this._renderAssignedSkills();
+      this._renderSkillsLibrary();
+    } catch (error) {
+      this._showToast(error.message, 'error');
+    }
+  }
+
+  _showSkillEditor(skill = null) {
+    const editor = document.getElementById('skills-editor');
+    const layout = document.querySelector('.skills-layout');
+    const titleEl = document.getElementById('skills-editor-title');
+    const nameInput = document.getElementById('skills-editor-name');
+    const categorySelect = document.getElementById('skills-editor-category');
+    const contentArea = document.getElementById('skills-editor-content');
+    const deleteBtn = document.getElementById('skills-editor-delete');
+
+    layout.style.display = 'none';
+    editor.classList.remove('hidden');
+
+    this._editingSkill = skill;
+
+    if (skill) {
+      titleEl.textContent = `Modifier : ${skill.name}`;
+      nameInput.value = skill.name;
+      nameInput.disabled = true;
+      categorySelect.value = skill.category;
+      categorySelect.disabled = true;
+      deleteBtn.classList.remove('hidden');
+
+      // Load content
+      fetch(`/api/skills-library/${encodeURIComponent(skill.category)}/${encodeURIComponent(skill.name)}`)
+        .then(r => r.json())
+        .then(data => {
+          contentArea.value = data.content || '';
+        })
+        .catch(() => {
+          contentArea.value = '';
+        });
+    } else {
+      titleEl.textContent = 'Nouveau skill';
+      nameInput.value = '';
+      nameInput.disabled = false;
+      categorySelect.value = this._skillsActiveCategory !== 'all' ? this._skillsActiveCategory : 'general';
+      categorySelect.disabled = false;
+      contentArea.value = '';
+      deleteBtn.classList.add('hidden');
+    }
+
+    nameInput.focus();
+  }
+
+  _hideSkillEditor() {
+    const editor = document.getElementById('skills-editor');
+    const layout = document.querySelector('.skills-layout');
+
+    editor.classList.add('hidden');
+    layout.style.display = '';
+    this._editingSkill = null;
+  }
+
+  async _saveSkill() {
+    const nameInput = document.getElementById('skills-editor-name');
+    const categorySelect = document.getElementById('skills-editor-category');
+    const contentArea = document.getElementById('skills-editor-content');
+
+    const name = nameInput.value.trim();
+    const category = categorySelect.value;
+    const content = contentArea.value;
+
+    if (!name) {
+      this._showToast('Le nom est requis', 'error');
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9-]+$/.test(name)) {
+      this._showToast('Nom invalide (alphanumérique et tirets uniquement)', 'error');
+      return;
+    }
+
+    try {
+      let res;
+      if (this._editingSkill) {
+        // Update existing
+        res = await fetch(`/api/skills-library/${encodeURIComponent(category)}/${encodeURIComponent(name)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+      } else {
+        // Create new
+        res = await fetch('/api/skills-library', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category, name, content }),
+        });
+      }
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      this._showToast(this._editingSkill ? 'Skill mis à jour' : 'Skill créé', 'success');
+      await this._loadSkillsLibrary();
+      this._hideSkillEditor();
+      this._renderSkillsLibrary();
+      this._renderAssignedSkills();
+    } catch (error) {
+      this._showToast(error.message, 'error');
+    }
+  }
+
+  async _deleteSkill(category, name) {
+    try {
+      const res = await fetch(`/api/skills-library/${encodeURIComponent(category)}/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+
+      this._showToast(`Skill "${name}" supprimé`, 'success');
+      await Promise.all([
+        this._loadSkillsLibrary(),
+        this._loadAssignedSkills(this._skillsProjectPath),
+      ]);
+      this._renderSkillsLibrary();
+      this._renderAssignedSkills();
+    } catch (error) {
+      this._showToast(error.message, 'error');
+    }
+  }
+
+  async _deleteSkillFromEditor() {
+    if (!this._editingSkill) return;
+    const { category, name } = this._editingSkill;
+
+    if (confirm(`Supprimer le skill "${name}" de la bibliothèque ?`)) {
+      this._hideSkillEditor();
+      await this._deleteSkill(category, name);
+    }
   }
 }
 

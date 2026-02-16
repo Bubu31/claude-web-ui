@@ -205,6 +205,84 @@
     </div>
   </div>
 
+  <!-- Skills Modal -->
+  <div id="skills-modal-overlay" class="modal-overlay hidden">
+    <div class="modal modal-large">
+      <div class="modal-header">
+        <h2><i class="fa-solid fa-wand-magic-sparkles"></i> Skills — <span id="skills-project-name"></span></h2>
+        <button id="skills-modal-close" class="btn-icon"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body skills-modal-body">
+        <!-- Main view: library (left) + assigned skills (right) -->
+        <div class="skills-layout">
+          <div class="skills-library-panel">
+            <div class="skills-panel-header">
+              <h3>Bibliothèque</h3>
+              <button id="skills-add-btn" class="btn-icon-sm" title="Créer un skill">
+                <i class="fa-solid fa-plus"></i>
+              </button>
+            </div>
+            <div class="skills-category-tabs" id="skills-category-tabs">
+              <!-- Category tabs rendered by JS -->
+            </div>
+            <div class="skills-list" id="skills-library-list">
+              <!-- Skills list rendered by JS -->
+            </div>
+          </div>
+          <div class="skills-assigned-panel">
+            <div class="skills-panel-header">
+              <h3>Skills actifs <span id="skills-assigned-count" class="skills-count">(0)</span></h3>
+            </div>
+            <div class="skills-list" id="skills-assigned-list">
+              <!-- Assigned skills rendered by JS -->
+            </div>
+          </div>
+        </div>
+        <!-- Editor view (hidden by default) -->
+        <div class="skills-editor hidden" id="skills-editor">
+          <div class="skills-editor-header">
+            <button id="skills-editor-back" class="btn btn-secondary btn-sm">
+              <i class="fa-solid fa-arrow-left"></i> Retour
+            </button>
+            <span id="skills-editor-title">Nouveau skill</span>
+          </div>
+          <div class="skills-editor-form">
+            <div class="skills-editor-row">
+              <div class="skills-editor-field">
+                <label for="skills-editor-name">Nom</label>
+                <input type="text" id="skills-editor-name" placeholder="mon-skill">
+              </div>
+              <div class="skills-editor-field">
+                <label for="skills-editor-category">Catégorie</label>
+                <select id="skills-editor-category">
+                  <option value="general">general</option>
+                  <option value="frontend">frontend</option>
+                  <option value="backend">backend</option>
+                  <option value="devops">devops</option>
+                </select>
+              </div>
+            </div>
+            <div class="skills-editor-field">
+              <label for="skills-editor-content">Contenu</label>
+              <textarea id="skills-editor-content" rows="15" placeholder="Contenu du skill en Markdown..."></textarea>
+            </div>
+            <div class="skills-editor-actions">
+              <button id="skills-editor-delete" class="btn btn-danger btn-sm hidden">
+                <i class="fa-solid fa-trash"></i> Supprimer
+              </button>
+              <button id="skills-editor-save" class="btn btn-primary btn-sm">
+                <i class="fa-solid fa-floppy-disk"></i> Enregistrer
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="skills-modal-close-btn" class="btn btn-secondary">Fermer</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-webgl@0.16.0/lib/xterm-addon-webgl.min.js"></script>
