@@ -2952,6 +2952,51 @@ body {
    ============================================= */
 
 /* Skills button in project list */
+/* Git status icons */
+.git-status-icon {
+  font-size: 0.6rem;
+  flex-shrink: 0;
+  margin-left: -0.1rem;
+}
+
+.git-status-icon.git-syncing {
+  color: var(--text-muted);
+}
+
+.git-status-icon.git-ok {
+  color: var(--accent-active);
+}
+
+.git-status-icon.git-updated {
+  color: var(--accent);
+}
+
+.git-status-icon.git-error {
+  color: var(--warning);
+}
+
+/* Git pull button */
+.project-item .git-pull-btn {
+  opacity: 0;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.15rem 0.3rem;
+  font-size: 0.7rem;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.project-item:hover .git-pull-btn {
+  opacity: 1;
+}
+
+.project-item .git-pull-btn:hover {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
 .project-item .skills-btn {
   opacity: 0;
   background: none;

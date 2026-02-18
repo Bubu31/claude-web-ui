@@ -307,12 +307,113 @@ class App {
     try {
       const response = await fetch('/api/projects');
       const data = await response.json();
-      this.projects = data.projects || [];
+      this.projects = (data.projects || []).map(p => ({ ...p, gitSyncStatus: null }));
       this._renderProjectsList();
+
+      // Launch git sync in background
+      this._syncAllProjects();
     } catch (error) {
       console.error('Failed to load projects:', error);
       this.projectsList.innerHTML = '<li class="loading">Erreur de chargement</li>';
     }
+  }
+
+  async _syncAllProjects() {
+    // Set all projects to syncing state
+    this.projects.forEach(p => p.gitSyncStatus = 'syncing');
+    this._updateGitIcons();
+
+    try {
+      const response = await fetch('/api/projects/git-sync', { method: 'POST' });
+      const data = await response.json();
+
+      if (data.results) {
+        for (const result of data.results) {
+          const project = this.projects.find(p => p.path === result.path);
+          if (project) {
+            project.gitSyncStatus = result.status;
+            project.gitSyncMessage = result.message;
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Git sync failed:', error);
+      this.projects.forEach(p => {
+        if (p.gitSyncStatus === 'syncing') p.gitSyncStatus = 'error';
+      });
+    }
+
+    this._updateGitIcons();
+  }
+
+  async _pullProject(projectPath) {
+    const project = this.projects.find(p => p.path === projectPath);
+    if (!project) return;
+
+    project.gitSyncStatus = 'syncing';
+    this._updateGitIcons();
+
+    try {
+      const response = await fetch('/api/projects/git-pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: projectPath }),
+      });
+      const data = await response.json();
+      project.gitSyncStatus = data.status || 'error';
+      project.gitSyncMessage = data.message;
+    } catch (error) {
+      project.gitSyncStatus = 'error';
+      project.gitSyncMessage = error.message;
+    }
+
+    this._updateGitIcons();
+  }
+
+  _updateGitIcons() {
+    this.projects.forEach(project => {
+      const icon = document.querySelector(`.git-status-icon[data-project-path="${CSS.escape(project.path)}"]`);
+      if (!icon) return;
+
+      // Reset classes
+      icon.className = 'git-status-icon';
+      icon.title = '';
+
+      switch (project.gitSyncStatus) {
+        case 'syncing':
+          icon.classList.add('fa-solid', 'fa-rotate', 'fa-spin', 'git-syncing');
+          icon.title = 'Synchronisation...';
+          break;
+        case 'up-to-date':
+          icon.classList.add('fa-solid', 'fa-check', 'git-ok');
+          icon.title = 'À jour';
+          break;
+        case 'updated':
+          icon.classList.add('fa-solid', 'fa-arrow-down', 'git-updated');
+          icon.title = project.gitSyncMessage || 'Mis à jour';
+          break;
+        case 'error':
+          icon.classList.add('fa-solid', 'fa-triangle-exclamation', 'git-error');
+          icon.title = project.gitSyncMessage || 'Erreur git';
+          break;
+        case 'not-git':
+          icon.style.display = 'none';
+          break;
+        default:
+          icon.style.display = 'none';
+          break;
+      }
+
+      if (project.gitSyncStatus && project.gitSyncStatus !== 'not-git') {
+        icon.style.display = '';
+      }
+
+      // Update pull button visibility
+      const pullBtn = document.querySelector(`.git-pull-btn[data-project-path="${CSS.escape(project.path)}"]`);
+      if (pullBtn) {
+        pullBtn.style.display = (project.gitSyncStatus && project.gitSyncStatus !== 'not-git' && project.gitSyncStatus !== 'syncing') ? '' : 'none';
+      }
+    });
   }
 
   async _connectToInstance(instanceData) {
@@ -1403,7 +1504,11 @@ class App {
       li.title = project.path;
       li.innerHTML = `
         <i class="fa-solid fa-folder"></i>
+        <i class="git-status-icon" data-project-path="${project.path}" style="display:none"></i>
         <span>${project.name}</span>
+        <button class="git-pull-btn" data-project-path="${project.path}" title="Git pull" style="display:none">
+          <i class="fa-solid fa-rotate"></i>
+        </button>
         <button class="skills-btn" title="Gérer les skills">
           <i class="fa-solid fa-wand-magic-sparkles"></i>
         </button>
@@ -1417,9 +1522,15 @@ class App {
 
       // Click on project name creates instance
       li.addEventListener('click', (e) => {
-        if (!e.target.closest('.md-btn') && !e.target.closest('.shell-btn') && !e.target.closest('.skills-btn')) {
+        if (!e.target.closest('.md-btn') && !e.target.closest('.shell-btn') && !e.target.closest('.skills-btn') && !e.target.closest('.git-pull-btn')) {
           this._createInstance(project.path);
         }
+      });
+
+      // Click on git pull button
+      li.querySelector('.git-pull-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._pullProject(project.path);
       });
 
       // Click on skills button opens skills modal
@@ -1442,6 +1553,9 @@ class App {
 
       this.projectsList.appendChild(li);
     });
+
+    // Restore git icon states after re-render
+    this._updateGitIcons();
   }
 
   _showModal() {

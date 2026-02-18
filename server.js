@@ -195,6 +195,109 @@ app.get('/api/projects', (req, res) => {
   }
 });
 
+// =============================================
+// GIT SYNC API
+// =============================================
+
+// Sync all projects (git pull on each git repo)
+app.post('/api/projects/git-sync', async (req, res) => {
+  try {
+    const projects = scanProjects(config.projectsRoot, config.projectMarker);
+    const results = projects.map(project => {
+      const gitDir = join(project.path, '.git');
+      if (!existsSync(gitDir)) {
+        return { path: project.path, name: project.name, status: 'not-git', message: null };
+      }
+      try {
+        const output = execSync('git pull', { cwd: project.path, encoding: 'utf-8', timeout: 15000 });
+        const trimmed = output.trim();
+        if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
+          return { path: project.path, name: project.name, status: 'up-to-date', message: trimmed };
+        }
+        return { path: project.path, name: project.name, status: 'updated', message: trimmed };
+      } catch (error) {
+        return { path: project.path, name: project.name, status: 'error', message: error.stderr || error.message };
+      }
+    });
+    res.json({ results });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get git status for all projects
+app.get('/api/projects/git-status', (req, res) => {
+  try {
+    const projects = scanProjects(config.projectsRoot, config.projectMarker);
+    const results = projects.map(project => {
+      const gitDir = join(project.path, '.git');
+      if (!existsSync(gitDir)) {
+        return { path: project.path, name: project.name, isGit: false };
+      }
+      try {
+        // Get branch name
+        let branch = '';
+        try {
+          branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: project.path, encoding: 'utf-8', timeout: 5000 }).trim();
+        } catch (e) {}
+
+        // Check ahead/behind
+        let ahead = 0, behind = 0;
+        try {
+          const counts = execSync('git rev-list --count --left-right HEAD...@{upstream}', { cwd: project.path, encoding: 'utf-8', timeout: 5000 }).trim();
+          const parts = counts.split('\t');
+          ahead = parseInt(parts[0]) || 0;
+          behind = parseInt(parts[1]) || 0;
+        } catch (e) {}
+
+        // Check dirty state
+        let dirty = false;
+        try {
+          const status = execSync('git status --porcelain', { cwd: project.path, encoding: 'utf-8', timeout: 5000 }).trim();
+          dirty = status.length > 0;
+        } catch (e) {}
+
+        return { path: project.path, name: project.name, isGit: true, branch, ahead, behind, dirty };
+      } catch (error) {
+        return { path: project.path, name: project.name, isGit: true, branch: '', ahead: 0, behind: 0, dirty: false, error: error.message };
+      }
+    });
+    res.json({ results });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Git pull a single project
+app.post('/api/projects/git-pull', (req, res) => {
+  const { path: projectPath } = req.body;
+
+  if (!projectPath) {
+    return res.status(400).json({ error: 'path is required' });
+  }
+
+  if (!existsSync(projectPath) || !statSync(projectPath).isDirectory()) {
+    return res.status(404).json({ error: 'Directory not found' });
+  }
+
+  const gitDir = join(projectPath, '.git');
+  if (!existsSync(gitDir)) {
+    return res.status(400).json({ error: 'Not a git repository' });
+  }
+
+  try {
+    const output = execSync('git pull', { cwd: projectPath, encoding: 'utf-8', timeout: 15000 });
+    const trimmed = output.trim();
+    if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
+      res.json({ status: 'up-to-date', message: trimmed });
+    } else {
+      res.json({ status: 'updated', message: trimmed });
+    }
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.stderr || error.message });
+  }
+});
+
 // List markdown files in a project
 app.get('/api/projects/markdown', (req, res) => {
   const { path: projectPath } = req.query;
