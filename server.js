@@ -211,7 +211,7 @@ app.post('/api/projects/git-sync', async (req, res) => {
         return { path: project.path, name: project.name, status: 'not-git', message: null };
       }
       try {
-        const { stdout } = await execFileAsync('git', ['pull'], { cwd: project.path, encoding: 'utf-8', timeout: 15000 });
+        const { stdout } = await execFileAsync('git', ['pull'], { cwd: project.path, encoding: 'utf-8', timeout: 15000, windowsHide: true });
         const trimmed = stdout.trim();
         if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
           return { path: project.path, name: project.name, status: 'up-to-date', message: trimmed };
@@ -288,7 +288,7 @@ app.post('/api/projects/git-pull', async (req, res) => {
   }
 
   try {
-    const { stdout } = await execFileAsync('git', ['pull'], { cwd: projectPath, encoding: 'utf-8', timeout: 15000 });
+    const { stdout } = await execFileAsync('git', ['pull'], { cwd: projectPath, encoding: 'utf-8', timeout: 15000, windowsHide: true });
     const trimmed = stdout.trim();
     if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
       res.json({ status: 'up-to-date', message: trimmed });
@@ -711,7 +711,7 @@ app.post('/api/templates/sync', async (req, res) => {
   if (!existsSync(templatesPath)) {
     // Clone if doesn't exist
     try {
-      await execFileAsync('git', ['clone', config.templatesRepo, templatesPath], { encoding: 'utf-8' });
+      await execFileAsync('git', ['clone', config.templatesRepo, templatesPath], { encoding: 'utf-8', windowsHide: true });
       res.json({ success: true, action: 'cloned' });
     } catch (error) {
       res.status(500).json({ error: 'Failed to clone repository: ' + error.message });
@@ -719,7 +719,7 @@ app.post('/api/templates/sync', async (req, res) => {
   } else {
     // Pull if exists
     try {
-      const { stdout } = await execFileAsync('git', ['pull'], { cwd: templatesPath, encoding: 'utf-8' });
+      const { stdout } = await execFileAsync('git', ['pull'], { cwd: templatesPath, encoding: 'utf-8', windowsHide: true });
       res.json({ success: true, action: 'pulled', message: stdout.trim() });
     } catch (error) {
       res.status(500).json({ error: 'Failed to pull updates: ' + error.message });
