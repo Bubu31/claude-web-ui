@@ -5,7 +5,9 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, unlinkSync, writeFileSync, symlinkSync, lstatSync, readlinkSync, rmSync } from 'fs';
 import { homedir, tmpdir } from 'os';
-import { execFileSync, execSync } from 'child_process';
+import { execFileSync, execSync, execFile } from 'child_process';
+import { promisify } from 'util';
+const execFileAsync = promisify(execFile);
 import multer from 'multer';
 import ffmpegPath from 'ffmpeg-static';
 import WaveFile from 'wavefile';
@@ -199,18 +201,18 @@ app.get('/api/projects', (req, res) => {
 // GIT SYNC API
 // =============================================
 
-// Sync all projects (git pull on each git repo)
+// Sync all projects (git pull on each git repo) - runs in background
 app.post('/api/projects/git-sync', async (req, res) => {
   try {
     const projects = scanProjects(config.projectsRoot, config.projectMarker);
-    const results = projects.map(project => {
+    const results = await Promise.allSettled(projects.map(async project => {
       const gitDir = join(project.path, '.git');
       if (!existsSync(gitDir)) {
         return { path: project.path, name: project.name, status: 'not-git', message: null };
       }
       try {
-        const output = execSync('git pull', { cwd: project.path, encoding: 'utf-8', timeout: 15000 });
-        const trimmed = output.trim();
+        const { stdout } = await execFileAsync('git', ['pull'], { cwd: project.path, encoding: 'utf-8', timeout: 15000 });
+        const trimmed = stdout.trim();
         if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
           return { path: project.path, name: project.name, status: 'up-to-date', message: trimmed };
         }
@@ -218,8 +220,8 @@ app.post('/api/projects/git-sync', async (req, res) => {
       } catch (error) {
         return { path: project.path, name: project.name, status: 'error', message: error.stderr || error.message };
       }
-    });
-    res.json({ results });
+    }));
+    res.json({ results: results.map(r => r.status === 'fulfilled' ? r.value : { status: 'error', message: r.reason?.message }) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -268,8 +270,8 @@ app.get('/api/projects/git-status', (req, res) => {
   }
 });
 
-// Git pull a single project
-app.post('/api/projects/git-pull', (req, res) => {
+// Git pull a single project - async
+app.post('/api/projects/git-pull', async (req, res) => {
   const { path: projectPath } = req.body;
 
   if (!projectPath) {
@@ -286,8 +288,8 @@ app.post('/api/projects/git-pull', (req, res) => {
   }
 
   try {
-    const output = execSync('git pull', { cwd: projectPath, encoding: 'utf-8', timeout: 15000 });
-    const trimmed = output.trim();
+    const { stdout } = await execFileAsync('git', ['pull'], { cwd: projectPath, encoding: 'utf-8', timeout: 15000 });
+    const trimmed = stdout.trim();
     if (trimmed.includes('Already up to date') || trimmed.includes('Already up-to-date')) {
       res.json({ status: 'up-to-date', message: trimmed });
     } else {
@@ -702,14 +704,14 @@ app.get('/api/templates', (req, res) => {
   }
 });
 
-// Sync templates (git pull)
-app.post('/api/templates/sync', (req, res) => {
+// Sync templates (git pull) - async
+app.post('/api/templates/sync', async (req, res) => {
   const templatesPath = config.templatesPath;
 
   if (!existsSync(templatesPath)) {
     // Clone if doesn't exist
     try {
-      execSync(`git clone ${config.templatesRepo} "${templatesPath}"`, { encoding: 'utf-8' });
+      await execFileAsync('git', ['clone', config.templatesRepo, templatesPath], { encoding: 'utf-8' });
       res.json({ success: true, action: 'cloned' });
     } catch (error) {
       res.status(500).json({ error: 'Failed to clone repository: ' + error.message });
@@ -717,8 +719,8 @@ app.post('/api/templates/sync', (req, res) => {
   } else {
     // Pull if exists
     try {
-      const result = execSync('git pull', { cwd: templatesPath, encoding: 'utf-8' });
-      res.json({ success: true, action: 'pulled', message: result.trim() });
+      const { stdout } = await execFileAsync('git', ['pull'], { cwd: templatesPath, encoding: 'utf-8' });
+      res.json({ success: true, action: 'pulled', message: stdout.trim() });
     } catch (error) {
       res.status(500).json({ error: 'Failed to pull updates: ' + error.message });
     }
